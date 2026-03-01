@@ -1904,10 +1904,35 @@
       } catch(e) { return null; }
     }
 
+    // Fallback: try multiple API sources accessible from China
+    var API_MIRRORS = [
+      'https://fapi.binance.com',
+      'https://fapi1.binance.com', 
+      'https://fapi2.binance.com',
+      'https://fapi3.binance.com',
+      'https://fapi4.binance.com'
+    ];
+
+    async function tryMultipleMirrors(path, timeout) {
+      timeout = timeout || 6000;
+      // Try all mirrors in parallel, return fastest response
+      var controllers = [];
+      var promises = API_MIRRORS.map(function(base, idx) {
+        var ctrl = new AbortController();
+        controllers.push(ctrl);
+        var timer = setTimeout(function() { ctrl.abort(); }, timeout);
+        return fetch(base + path, { signal: ctrl.signal })
+          .then(function(res) { clearTimeout(timer); return res; })
+          .catch(function(err) { clearTimeout(timer); throw err; });
+      });
+      // Return fastest successful response
+      return Promise.any(promises);
+    }
+
     async function directBinanceTickers() {
       var results = await Promise.all([
-        fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr', {}, 12000),
-        fetchWithTimeout('https://fapi.binance.com/fapi/v1/premiumIndex', {}, 12000),
+        tryMultipleMirrors('/fapi/v1/ticker/24hr', 12000),
+        tryMultipleMirrors('/fapi/v1/premiumIndex', 12000),
       ]);
       var tickerData = await results[0].json();
       var fundingData = await results[1].json();
@@ -1939,7 +1964,7 @@
     }
 
     async function directBinanceBtcEth() {
-      var res = await fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr', {}, 10000);
+      var res = await tryMultipleMirrors('/fapi/v1/ticker/24hr', 10000);
       var data = await res.json();
       var btc = data.find(function(t){return t.symbol==='BTCUSDT';});
       var eth = data.find(function(t){return t.symbol==='ETHUSDT';});
