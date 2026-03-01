@@ -1877,86 +1877,136 @@
       }
     });
 
-    async function loadTickers() {
-      const btn = document.getElementById('btn-refresh-tickers');
-      btn.classList.add('loading');
+
+    // ========================================
+    // China Network: Timeout + Cache + Direct Binance Fallback
+    // ========================================
+    function fetchWithTimeout(url, options, timeoutMs) {
+      timeoutMs = timeoutMs || 8000;
+      options = options || {};
+      var controller = new AbortController();
+      var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
+      return fetch(url, Object.assign({}, options, { signal: controller.signal }))
+        .then(function(res) { clearTimeout(timer); return res; })
+        .catch(function(err) { clearTimeout(timer); throw err; });
+    }
+    function saveCache(key, data) {
+      try { localStorage.setItem('ct_' + key, JSON.stringify({ ts: Date.now(), data: data })); } catch(e) {}
+    }
+    function loadCache(key, maxAgeMs) {
+      maxAgeMs = maxAgeMs || 300000;
       try {
-        const res = await fetch('/api/binance/tickers');
-        const json = await res.json();
-        allTickersData = json.data || [];
-        otherHotData = json.other || [];
-
-        applySort(allTickersData);
-        applySort(otherHotData);
-
-        // Update BTC/ETH stat cards from top 100
-        const btcData = allTickersData.find(d => d.symbol === 'BTC/USDT');
-        const ethData = allTickersData.find(d => d.symbol === 'ETH/USDT');
-        if (btcData) {
-          document.getElementById('stat-btc').textContent = '$' + fmt(btcData.price, 2);
-          const c = btcData.change24h;
-          document.getElementById('stat-btc-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          document.getElementById('stat-btc-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
-        }
-        if (ethData) {
-          document.getElementById('stat-eth').textContent = '$' + fmt(ethData.price, 2);
-          const c = ethData.change24h;
-          document.getElementById('stat-eth-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          document.getElementById('stat-eth-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
-        }
-
-        // Update Total Volume
-        if (json.total_volume) {
-          document.getElementById('stat-volume').textContent = '$' + fmtVol(json.total_volume);
-        }
-        if (json.volume_change !== undefined) {
-          const c = json.volume_change;
-          const volSub = document.getElementById('stat-volume-sub');
-          volSub.textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          volSub.style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
-          volSub.style.fontWeight = '600';
-        }
-
-        renderTickers();
-      } catch (e) {
-        console.error('Failed to load tickers:', e);
-        document.getElementById('ticker-tbody').innerHTML =
-          `<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--accent-rose)">加载失败: ${e.message}</td></tr>`;
-      } finally {
-        btn.classList.remove('loading');
-      }
+        var raw = localStorage.getItem('ct_' + key);
+        if (!raw) return null;
+        var obj = JSON.parse(raw);
+        if (Date.now() - obj.ts > maxAgeMs) return null;
+        return obj.data;
+      } catch(e) { return null; }
     }
 
-    async function loadFNG() {
+    async function directBinanceTickers() {
+      var results = await Promise.all([
+        fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr', {}, 12000),
+        fetchWithTimeout('https://fapi.binance.com/fapi/v1/premiumIndex', {}, 12000),
+      ]);
+      var tickerData = await results[0].json();
+      var fundingData = await results[1].json();
+      var fundingMap = {};
+      if (Array.isArray(fundingData)) fundingData.forEach(function(item) { if (item.symbol) fundingMap[item.symbol] = item; });
+      var usdtPairs = [], otherPairs = [];
+      if (Array.isArray(tickerData)) {
+        tickerData.forEach(function(t) {
+          var sym = t.symbol || '';
+          if (!sym.endsWith('USDT') || parseFloat(t.quoteVolume || 0) <= 1000000) return;
+          var fInfo = fundingMap[sym] || {};
+          if (!fInfo.nextFundingTime || fInfo.nextFundingTime <= 0) return;
+          var fr = parseFloat(fInfo.lastFundingRate || 0);
+          (fr === 0 ? otherPairs : usdtPairs).push(t);
+        });
+      }
+      usdtPairs.sort(function(a,b) { return parseFloat(b.priceChangePercent||0) - parseFloat(a.priceChangePercent||0); });
+      otherPairs.sort(function(a,b) { return parseFloat(b.priceChangePercent||0) - parseFloat(a.priceChangePercent||0); });
+      var totalVolume = 0;
+      usdtPairs.concat(otherPairs).forEach(function(t) { totalVolume += parseFloat(t.quoteVolume || 0); });
+      function mapResult(items) {
+        return items.map(function(t, i) {
+          var sym = t.symbol || '';
+          var fInfo = fundingMap[sym] || {};
+          return { rank:i+1, symbol:sym.replace('USDT','/USDT'), price:parseFloat(t.lastPrice||0), change24h:parseFloat(t.priceChangePercent||0), high24h:parseFloat(t.highPrice||0), low24h:parseFloat(t.lowPrice||0), volume24h:parseFloat(t.quoteVolume||0), trades:parseInt(t.count||0), fundingRate:parseFloat(fInfo.lastFundingRate||0), nextFundingTime:parseInt(fInfo.nextFundingTime||0), fundingInterval:8, lsRatio:{ratio:0,long:0,short:0} };
+        });
+      }
+      return { exchange:'Binance', data:mapResult(usdtPairs), other:mapResult(otherPairs), total_volume:totalVolume, volume_change:0, ts:Date.now() };
+    }
+
+    async function directBinanceBtcEth() {
+      var res = await fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr', {}, 10000);
+      var data = await res.json();
+      var btc = data.find(function(t){return t.symbol==='BTCUSDT';});
+      var eth = data.find(function(t){return t.symbol==='ETHUSDT';});
+      return { btc:btc?{price:parseFloat(btc.lastPrice),change:parseFloat(btc.priceChangePercent)}:null, eth:eth?{price:parseFloat(eth.lastPrice),change:parseFloat(eth.priceChangePercent)}:null };
+    }
+
+    async function directFNG() {
+      var res = await fetchWithTimeout('https://api.alternative.me/fng/?limit=2', {}, 10000);
+      var json = await res.json();
+      var cur = json.data && json.data[0];
+      var prev = json.data && json.data[1];
+      var value = cur ? parseInt(cur.value) : 50;
+      var change24h = prev ? ((value - parseInt(prev.value)) / parseInt(prev.value)) * 100 : 0;
+      return { value:value, classification:cur?cur.value_classification:'N/A', change24h:change24h };
+    }
+
+    function applyTickerData(json) {
+      allTickersData = json.data || [];
+      otherHotData = json.other || [];
+      applySort(allTickersData); applySort(otherHotData);
+      var btcData = allTickersData.find(function(d){return d.symbol==='BTC/USDT';});
+      var ethData = allTickersData.find(function(d){return d.symbol==='ETH/USDT';});
+      if (btcData) { document.getElementById('stat-btc').textContent='$'+fmt(btcData.price,2); var c=btcData.change24h; document.getElementById('stat-btc-change').textContent=(c>=0?'+':'')+c.toFixed(2)+'%'; document.getElementById('stat-btc-change').style.color=c>=0?'var(--gain)':'var(--loss)'; }
+      if (ethData) { document.getElementById('stat-eth').textContent='$'+fmt(ethData.price,2); var c2=ethData.change24h; document.getElementById('stat-eth-change').textContent=(c2>=0?'+':'')+c2.toFixed(2)+'%'; document.getElementById('stat-eth-change').style.color=c2>=0?'var(--gain)':'var(--loss)'; }
+      if (json.total_volume) document.getElementById('stat-volume').textContent='$'+fmtVol(json.total_volume);
+      if (json.volume_change!==undefined) { var vc=json.volume_change; var vs=document.getElementById('stat-volume-sub'); vs.textContent=(vc>=0?'+':'')+vc.toFixed(2)+'%'; vs.style.color=vc>=0?'var(--gain)':'var(--loss)'; vs.style.fontWeight='600'; }
+      renderTickers();
+    }
+
+    async function loadTickers() {
+      var btn = document.getElementById('btn-refresh-tickers');
+      btn.classList.add('loading');
+      var cached = loadCache('tickers', 600000);
+      if (cached && allTickersData.length === 0) { console.log('[Cache] Using cached tickers'); applyTickerData(cached); }
       try {
-        const res = await fetch('/api/market/fng');
-        const json = await res.json();
+        var res = await fetchWithTimeout('/api/binance/tickers', {}, 8000);
+        var json = await res.json();
+        if (json.data && json.data.length > 0) { saveCache('tickers', json); applyTickerData(json); console.log('[API] Workers OK:', json.data.length); btn.classList.remove('loading'); return; }
+      } catch(e) { console.warn('[API] Workers failed:', e.message); }
+      try {
+        var json2 = await directBinanceTickers();
+        if (json2.data && json2.data.length > 0) { saveCache('tickers', json2); applyTickerData(json2); console.log('[Fallback] Direct Binance OK:', json2.data.length); }
+      } catch(e2) {
+        console.error('[Fallback] Direct Binance failed:', e2.message);
+        if (!cached) document.getElementById('ticker-tbody').innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--accent-rose)">缃戠粶杩炴帴澶辫触锛岃鍒锋柊閲嶈瘯</td></tr>';
+      } finally { btn.classList.remove('loading'); }
+    }
 
-        const fngVal = document.getElementById('stat-fng');
-        const fngSub = document.getElementById('stat-fng-sub');
-
-        fngVal.textContent = json.value;
-        const c = json.change24h !== undefined ? Number(json.change24h) : 0;
-        fngSub.textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '% 24H变化';
-        fngSub.style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
-        fngSub.style.fontWeight = '600';
-
-        if (json.value <= 25) fngVal.style.color = 'var(--loss)'; // Extreme Fear
-        else if (json.value <= 45) fngVal.style.color = '#ff9800'; // Fear
-        else if (json.value <= 55) fngVal.style.color = 'var(--text-primary)'; // Neutral
-        else if (json.value <= 75) fngVal.style.color = 'var(--gain)'; // Greed
-        else fngVal.style.color = 'var(--accent-emerald)'; // Extreme Greed
-
-      } catch (e) {
-        console.error('Failed to load FNG:', e);
-        document.getElementById('stat-fng-sub').textContent = '数据获取失败';
+    function applyFNGData(json) {
+      var fv = document.getElementById('stat-fng'); var fs = document.getElementById('stat-fng-sub');
+      fv.textContent = json.value; var c = json.change24h !== undefined ? Number(json.change24h) : 0;
+      fs.textContent = (c>=0?'+':'') + c.toFixed(2) + '% 24H鍙樺寲'; fs.style.color = c>=0?'var(--gain)':'var(--loss)'; fs.style.fontWeight = '600';
+      if (json.value<=25) fv.style.color='var(--loss)'; else if (json.value<=45) fv.style.color='#ff9800'; else if (json.value<=55) fv.style.color='var(--text-primary)'; else if (json.value<=75) fv.style.color='var(--gain)'; else fv.style.color='var(--accent-emerald)';
+    }
+    async function loadFNG() {
+      var cached = loadCache('fng', 600000);
+      if (cached) applyFNGData(cached);
+      try { var res = await fetchWithTimeout('/api/market/fng', {}, 8000); var json = await res.json(); saveCache('fng', json); applyFNGData(json); }
+      catch(e) { console.warn('[FNG] Workers failed:', e.message);
+        try { var json2 = await directFNG(); saveCache('fng', json2); applyFNGData(json2); } catch(e2) { if (!cached) document.getElementById('stat-fng-sub').textContent='鏁版嵁鑾峰彇澶辫触'; }
       }
     }
 
     // === Load System Info ===
     async function loadSystemInfo() {
       try {
-        const res = await fetch('/api/system/info');
+        const res = await fetchWithTimeout('/api/system/info', {}, 8000);
         const info = await res.json();
 
         // (Modules and Exchanges sections have been removed from UI)
@@ -1972,7 +2022,7 @@
       const btn = document.getElementById('btn-refresh-grid');
       if (btn) btn.classList.add('loading');
       try {
-        const res = await fetch('/api/grid/backtest');
+        const res = await fetchWithTimeout('/api/grid/backtest', {}, 8000);
         const json = await res.json();
         const data = json.data || [];
         const tbody = document.getElementById('grid-tbody');
@@ -2064,17 +2114,18 @@
 
     // === New Module Loaders ===
     async function loadMockData(url, tbodyId, renderFn) {
+      var cacheKey = 'mock_' + tbodyId;
+      var cached = loadCache(cacheKey, 1800000);
+      var tbody = document.getElementById(tbodyId);
+      if (cached && cached.data && cached.data.length) { tbody.innerHTML = cached.data.map(renderFn).join(''); }
       try {
-        const res = await fetch(url);
-        const json = await res.json();
-        const tbody = document.getElementById(tbodyId);
-        if (!json.data || !json.data.length) {
-          tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--text-muted)">暂无数据</td></tr>';
-          return;
-        }
+        var res = await fetchWithTimeout(url, {}, 8000);
+        var json = await res.json();
+        if (!json.data || !json.data.length) { if (!cached) tbody.innerHTML='<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--text-muted)">鏆傛棤鏁版嵁</td></tr>'; return; }
+        saveCache(cacheKey, json);
         tbody.innerHTML = json.data.map(renderFn).join('');
-      } catch (e) {
-        document.getElementById(tbodyId).innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--accent-rose);">加载失败: ${e.message}</td></tr>`;
+      } catch(e) {
+        if (!cached) tbody.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--text-muted);">鍔犺浇涓?..</td></tr>';
       }
     }
 
@@ -2109,23 +2160,39 @@
     </tr>`;
 
     // === Init ===
+    function applyBtcEthData(data) {
+      if (data.btc && data.btc.price) {
+        document.getElementById('stat-btc').textContent = '$' + fmt(data.btc.price, 2);
+        var c = data.btc.change;
+        document.getElementById('stat-btc-change').textContent = (c>=0?'+':'') + c.toFixed(2) + '%';
+        document.getElementById('stat-btc-change').style.color = c>=0 ? 'var(--gain)' : 'var(--loss)';
+      }
+      if (data.eth && data.eth.price) {
+        document.getElementById('stat-eth').textContent = '$' + fmt(data.eth.price, 2);
+        var c2 = data.eth.change;
+        document.getElementById('stat-eth-change').textContent = (c2>=0?'+':'') + c2.toFixed(2) + '%';
+        document.getElementById('stat-eth-change').style.color = c2>=0 ? 'var(--gain)' : 'var(--loss)';
+      }
+    }
+
     async function loadBtcEth() {
+      var cached = loadCache('btceth', 300000);
+      if (cached) applyBtcEthData(cached);
       try {
-        const res = await fetch('/api/binance/btc_eth');
-        const data = await res.json();
-        if (data.btc && data.btc.price) {
-          document.getElementById('stat-btc').textContent = '$' + fmt(data.btc.price, 2);
-          const c = data.btc.change;
-          document.getElementById('stat-btc-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          document.getElementById('stat-btc-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
+        var res = await fetchWithTimeout('/api/binance/btc_eth', {}, 8000);
+        var data = await res.json();
+        saveCache('btceth', data);
+        applyBtcEthData(data);
+      } catch(e) {
+        console.warn('[BTC/ETH] Workers failed, direct Binance:', e.message);
+        try {
+          var data2 = await directBinanceBtcEth();
+          saveCache('btceth', data2);
+          applyBtcEthData(data2);
+        } catch(e2) {
+          console.error('[BTC/ETH] Direct also failed:', e2.message);
         }
-        if (data.eth && data.eth.price) {
-          document.getElementById('stat-eth').textContent = '$' + fmt(data.eth.price, 2);
-          const c = data.eth.change;
-          document.getElementById('stat-eth-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          document.getElementById('stat-eth-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
-        }
-      } catch (e) { console.error('BTC/ETH load error:', e); }
+      }
     }
 
     loadBtcEth();
