@@ -40,6 +40,28 @@ def md_to_html(text):
     
     lines = text.split('\n')
     out = []
+    
+    def colorize(s):
+        # Colorize percentages: negative -> loss (red), positive -> gain (green), 0 -> neutral
+        def repl_pct(m):
+            val_str = m.group(1)
+            try:
+                val = float(val_str.replace(',', ''))
+                color = "var(--loss)" if val < 0 else ("var(--gain)" if val > 0 else "var(--text-primary)")
+                return f'<span style="color:{color};font-weight:600">{val_str}%</span>'
+            except:
+                return f'<span style="color:var(--text-primary);font-weight:600">{val_str}%</span>'
+        s = _re.sub(r'(-?[\d\,\.]+)\%', repl_pct, s)
+        
+        # Bold USD prices
+        s = _re.sub(r'(\$[\d\,\.]+)', r'<span style="color:var(--text-primary);font-weight:600">\1</span>', s)
+        # Bold crypto small prices (0.xxx)
+        s = _re.sub(r'(?<!\d)(0\.\d{3,})(?!\d)', r'<span style="color:var(--text-primary);font-weight:600">\1</span>', s)
+        # Highlight keywords
+        s = _re.sub(r'(多头)', r'<span style="color:var(--gain);font-weight:600">多头</span>', s)
+        s = _re.sub(r'(空头)', r'<span style="color:var(--loss);font-weight:600">空头</span>', s)
+        return s
+
     for line in lines:
         stripped = line.strip()
         if not stripped:
@@ -56,21 +78,32 @@ def md_to_html(text):
             out.append(f'<strong style="color:var(--text-primary)">{stripped[4:]}</strong><br>')
             continue
         if stripped.startswith('## '):
-            out.append(f'<strong style="color:var(--text-primary)">{stripped[3:]}</strong><br>')
+            out.append(f'<br><strong style="color:var(--text-primary)">{stripped[3:]}</strong><br>')
             continue
         if stripped.startswith('# '):
             out.append(f'<strong style="color:var(--text-primary)">{stripped[2:]}</strong><br>')
             continue
+        
         # Numbered headers like "1. Title" or "2. Title" at block level
         m = _re.match(r'^(\d+)\.\s+(.+)', stripped)
         if m and not any(c in m.group(2) for c in ['$', '：', ':']):
             # Likely a section header
             out.append(f'<br><strong style="color:var(--text-primary)"><span style="color:var(--accent-blue);margin-right:4px">{m.group(1)}.</span> {m.group(2)}</strong><br>')
             continue
-        # Regular line - just append with <br>
-        out.append(f'{line}<br>')
+        
+        # Formatted line processing
+        formatted_line = colorize(stripped)
+        
+        # Bullets
+        if formatted_line.startswith('- ') or formatted_line.startswith('* ') or formatted_line.startswith('• '):
+            formatted_line = f'<div style="padding-left: 8px; text-indent: -8px; margin: 4px 0;">&#8226; {formatted_line[2:]}</div>'
+            out.append(formatted_line)
+            continue
+            
+        # Regular line
+        out.append(f'<div style="margin: 4px 0;">{formatted_line}</div>')
     
-    return '\n'.join(out)
+    return ''.join(out)
 
 app.add_middleware(
     CORSMiddleware,
