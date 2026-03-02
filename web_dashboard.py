@@ -29,78 +29,81 @@ import re
 app = FastAPI(title="多交易所策略自动化系统 Dashboard")
 
 def md_to_html(text):
-    """Convert markdown to HTML for chatbot responses."""
+    """Convert markdown to HTML for chatbot responses (compact layout)."""
     if not text:
         return text
     lines = text.split('\n')
-    html_lines = []
+    html_parts = []
     in_list = False
+    list_type = 'ul'
     in_code = False
     for line in lines:
         # Code blocks
         if line.strip().startswith('```'):
             if in_code:
-                html_lines.append('</code></pre>')
+                html_parts.append('</code></pre>')
                 in_code = False
             else:
-                html_lines.append('<pre><code>')
+                html_parts.append('<pre><code>')
                 in_code = True
             continue
         if in_code:
-            html_lines.append(line)
+            html_parts.append(line + '\n')
             continue
         # Headers
         if line.startswith('#### '):
-            if in_list: html_lines.append('</ul>'); in_list = False
-            html_lines.append(f'<h4>{line[5:]}</h4>')
+            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
+            html_parts.append(f'<div style="font-weight:700;font-size:0.95rem;margin:8px 0 4px;color:#333">{line[5:]}</div>')
             continue
         if line.startswith('### '):
-            if in_list: html_lines.append('</ul>'); in_list = False
-            html_lines.append(f'<h3>{line[4:]}</h3>')
+            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
+            html_parts.append(f'<div style="font-weight:700;font-size:1.05rem;margin:10px 0 4px;border-bottom:1px solid rgba(0,0,0,0.08);padding-bottom:3px">{line[4:]}</div>')
             continue
         if line.startswith('## '):
-            if in_list: html_lines.append('</ul>'); in_list = False
-            html_lines.append(f'<h2>{line[3:]}</h2>')
+            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
+            html_parts.append(f'<div style="font-weight:700;font-size:1.1rem;margin:10px 0 4px">{line[3:]}</div>')
             continue
         if line.startswith('# '):
-            if in_list: html_lines.append('</ul>'); in_list = False
-            html_lines.append(f'<h1>{line[2:]}</h1>')
+            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
+            html_parts.append(f'<div style="font-weight:700;font-size:1.15rem;margin:8px 0 4px">{line[2:]}</div>')
             continue
         # List items
         m = re.match(r'^\s*[-*]\s+(.+)', line)
         if m:
             if not in_list:
-                html_lines.append('<ul>')
+                list_type = 'ul'
+                html_parts.append('<ul style="margin:2px 0;padding-left:18px">')
                 in_list = True
-            html_lines.append(f'<li>{m.group(1)}</li>')
+            html_parts.append(f'<li style="margin:1px 0">{m.group(1)}</li>')
             continue
         m2 = re.match(r'^\s*(\d+)\.\s+(.+)', line)
         if m2:
             if not in_list:
-                html_lines.append('<ol>')
+                list_type = 'ol'
+                html_parts.append('<ol style="margin:2px 0;padding-left:18px">')
                 in_list = True
-            html_lines.append(f'<li>{m2.group(2)}</li>')
+            html_parts.append(f'<li style="margin:1px 0">{m2.group(2)}</li>')
             continue
-        # Close list
+        # Close list on empty line
         if in_list and line.strip() == '':
-            html_lines.append('</ul>' if '</li>' in html_lines[-1] else '</ol>')
+            html_parts.append(f'</{list_type}>')
             in_list = False
             continue
-        # Empty line -> paragraph break
+        # Empty line -> small break
         if line.strip() == '':
-            html_lines.append('<br>')
+            html_parts.append('<div style="height:6px"></div>')
             continue
         # Regular line
-        html_lines.append(f'<p>{line}</p>')
+        html_parts.append(f'{line}<br>')
     if in_list:
-        html_lines.append('</ul>')
+        html_parts.append(f'</{list_type}>')
     if in_code:
-        html_lines.append('</code></pre>')
-    result = '\n'.join(html_lines)
+        html_parts.append('</code></pre>')
+    result = '\n'.join(html_parts)
     # Inline: bold, italic, code
     result = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', result)
     result = re.sub(r'\*(.+?)\*', r'<em>\1</em>', result)
-    result = re.sub(r'`([^`]+)`', r'<code>\1</code>', result)
+    result = re.sub(r'`([^`]+)`', r'<code style="background:rgba(0,0,0,0.06);padding:1px 4px;border-radius:3px;font-size:0.9em">\1</code>', result)
     return result
 
 app.add_middleware(
