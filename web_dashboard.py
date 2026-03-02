@@ -24,7 +24,84 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+import re
+
 app = FastAPI(title="多交易所策略自动化系统 Dashboard")
+
+def md_to_html(text):
+    """Convert markdown to HTML for chatbot responses."""
+    if not text:
+        return text
+    lines = text.split('\n')
+    html_lines = []
+    in_list = False
+    in_code = False
+    for line in lines:
+        # Code blocks
+        if line.strip().startswith('```'):
+            if in_code:
+                html_lines.append('</code></pre>')
+                in_code = False
+            else:
+                html_lines.append('<pre><code>')
+                in_code = True
+            continue
+        if in_code:
+            html_lines.append(line)
+            continue
+        # Headers
+        if line.startswith('#### '):
+            if in_list: html_lines.append('</ul>'); in_list = False
+            html_lines.append(f'<h4>{line[5:]}</h4>')
+            continue
+        if line.startswith('### '):
+            if in_list: html_lines.append('</ul>'); in_list = False
+            html_lines.append(f'<h3>{line[4:]}</h3>')
+            continue
+        if line.startswith('## '):
+            if in_list: html_lines.append('</ul>'); in_list = False
+            html_lines.append(f'<h2>{line[3:]}</h2>')
+            continue
+        if line.startswith('# '):
+            if in_list: html_lines.append('</ul>'); in_list = False
+            html_lines.append(f'<h1>{line[2:]}</h1>')
+            continue
+        # List items
+        m = re.match(r'^\s*[-*]\s+(.+)', line)
+        if m:
+            if not in_list:
+                html_lines.append('<ul>')
+                in_list = True
+            html_lines.append(f'<li>{m.group(1)}</li>')
+            continue
+        m2 = re.match(r'^\s*(\d+)\.\s+(.+)', line)
+        if m2:
+            if not in_list:
+                html_lines.append('<ol>')
+                in_list = True
+            html_lines.append(f'<li>{m2.group(2)}</li>')
+            continue
+        # Close list
+        if in_list and line.strip() == '':
+            html_lines.append('</ul>' if '</li>' in html_lines[-1] else '</ol>')
+            in_list = False
+            continue
+        # Empty line -> paragraph break
+        if line.strip() == '':
+            html_lines.append('<br>')
+            continue
+        # Regular line
+        html_lines.append(f'<p>{line}</p>')
+    if in_list:
+        html_lines.append('</ul>')
+    if in_code:
+        html_lines.append('</code></pre>')
+    result = '\n'.join(html_lines)
+    # Inline: bold, italic, code
+    result = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', result)
+    result = re.sub(r'\*(.+?)\*', r'<em>\1</em>', result)
+    result = re.sub(r'`([^`]+)`', r'<code>\1</code>', result)
+    return result
 
 app.add_middleware(
     CORSMiddleware,
@@ -887,7 +964,7 @@ async def api_ai_chat(request: Request):
             if resp.status_code == 200:
                 data = resp.json()
                 reply = data["choices"][0]["message"]["content"]
-                return JSONResponse(content={"reply": reply})
+                return JSONResponse(content={"reply": md_to_html(reply)})
             else:
                 return JSONResponse(content={"reply": f"大模型接口请求失败: HTTP {resp.status_code}\n```json\n{resp.text}\n```"})
     except Exception as e:
