@@ -634,7 +634,7 @@
       flex: 1;
       width: 100%;
       height: 100%;
-      background: #131722;
+      background: #ffffff;
       display: flex;
       flex-direction: column;
     }
@@ -1749,18 +1749,18 @@
 
       // Toolbar
       const toolbar = document.createElement('div');
-      toolbar.style.cssText = 'display:flex;gap:4px;padding:6px 10px;background:#131722;border-bottom:1px solid #2B2B43;align-items:center;';
+      toolbar.style.cssText = 'display:flex;gap:4px;padding:6px 10px;background:#fff;border-bottom:1px solid #e0e3eb;align-items:center;';
       const intervals = [['1m', '1分'], ['15m', '15分'], ['1h', '1小时'], ['4h', '4小时'], ['1d', '日线']];
       intervals.forEach(([val, label]) => {
         const btn = document.createElement('button');
         btn.textContent = label;
-        btn.style.cssText = `padding:3px 10px;border:1px solid ${val === interval ? '#2962FF' : '#363A45'};background:${val === interval ? '#2962FF' : 'transparent'};color:${val === interval ? '#fff' : '#d1d4dc'};border-radius:4px;cursor:pointer;font-size:12px;`;
+        btn.style.cssText = `padding:3px 10px;border:1px solid ${val === interval ? '#2962FF' : '#e0e3eb'};background:${val === interval ? '#2962FF' : '#f8f9fd'};color:${val === interval ? '#fff' : '#131722'};border-radius:4px;cursor:pointer;font-size:12px;`;
         btn.onclick = () => switchInterval(val);
         toolbar.appendChild(btn);
       });
       const infoSpan = document.createElement('span');
       infoSpan.style.cssText = 'margin-left:auto;color:#787B86;font-size:11px;';
-      infoSpan.textContent = sym + ' · Binance Futures';
+      infoSpan.textContent = sym + ' · Binance Futures · ' + intervals.find(i => i[0] === interval)[1];
       toolbar.appendChild(infoSpan);
       container.appendChild(toolbar);
 
@@ -1784,11 +1784,11 @@
           const chart = LightweightCharts.createChart(chartArea, {
             width: chartArea.clientWidth,
             height: chartArea.clientHeight,
-            layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
-            grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+            layout: { background: { type: 'solid', color: '#ffffff' }, textColor: '#131722' },
+            grid: { vertLines: { color: '#f0f3fa' }, horzLines: { color: '#f0f3fa' } },
             crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            rightPriceScale: { borderColor: '#2B2B43' },
-            timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#2B2B43' },
+            rightPriceScale: { borderColor: '#e0e3eb' },
+            timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#e0e3eb' },
           });
 
           const candles = data.map(k => ({
