@@ -232,6 +232,96 @@ async def api_binance_tickers():
         "ts": int(time.time() * 1000)
     })
 
+@app.get("/api/binance/tickers_fast")
+async def api_binance_tickers_fast():
+    """Fast endpoint: no L/S ratios, instant response for initial page load."""
+    cache_key = "binance_tickers_fast"
+    now = time.time()
+    if cache_key in _cache and now - _cache[cache_key]["ts"] < _cache_ttl:
+        return JSONResponse(content=_cache[cache_key]["data"])
+
+    url_ticker = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    url_funding = "https://fapi.binance.com/fapi/v1/premiumIndex"
+    url_funding_info = "https://fapi.binance.com/fapi/v1/fundingInfo"
+    url_btc_klines = "https://fapi.binance.com/fapi/v1/klines"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp_ticker, resp_funding, resp_info, resp_klines = await asyncio.gather(
+                client.get(url_ticker),
+                client.get(url_funding),
+                client.get(url_funding_info),
+                client.get(url_btc_klines, params={"symbol": "BTCUSDT", "interval": "1d", "limit": 2})
+            )
+            data = resp_ticker.json()
+            funding_data = resp_funding.json()
+            info_data = resp_info.json()
+            btc_klines = resp_klines.json()
+
+            vol_change = 0.0
+            if isinstance(btc_klines, list) and len(btc_klines) >= 2:
+                y_vol = float(btc_klines[0][7])
+                t_vol = float(btc_klines[1][7])
+                if y_vol > 0:
+                    vol_change = (t_vol - y_vol) / y_vol * 100
+
+            funding_map = {item["symbol"]: item for item in funding_data if "symbol" in item}
+            interval_map = {}
+            if isinstance(info_data, list):
+                interval_map = {item.get("symbol", ""): item.get("fundingIntervalHours", 8) for item in info_data if isinstance(item, dict)}
+
+            usdt_pairs = []
+            other_pairs = []
+            for t in data:
+                sym = t.get("symbol", "")
+                if sym.endswith("USDT") and float(t.get("quoteVolume", 0)) > 1_000_000:
+                    f_info = funding_map.get(sym, {})
+                    if f_info.get("nextFundingTime", 0) > 0:
+                        funding_rate = float(f_info.get("lastFundingRate", 0))
+                        if funding_rate == 0.0:
+                            other_pairs.append(t)
+                        else:
+                            usdt_pairs.append(t)
+
+            usdt_pairs.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
+            other_pairs.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
+
+            def map_result_fast(items):
+                res = []
+                for i, t in enumerate(items):
+                    sym = t.get("symbol", "")
+                    f_info = funding_map.get(sym, {})
+                    interval = interval_map.get(sym, 8)
+                    res.append({
+                        "rank": i + 1,
+                        "symbol": sym.replace("USDT", "/USDT"),
+                        "price": float(t.get("lastPrice", 0)),
+                        "change24h": float(t.get("priceChangePercent", 0)),
+                        "high24h": float(t.get("highPrice", 0)),
+                        "low24h": float(t.get("lowPrice", 0)),
+                        "volume24h": float(t.get("quoteVolume", 0)),
+                        "trades": int(t.get("count", 0)),
+                        "fundingRate": float(f_info.get("lastFundingRate", 0)),
+                        "nextFundingTime": int(f_info.get("nextFundingTime", 0)),
+                        "fundingInterval": interval,
+                        "lsRatio": {"ratio": 0, "long": 0, "short": 0}
+                    })
+                return res
+
+            total_volume = sum(float(t.get("quoteVolume", 0)) for t in usdt_pairs + other_pairs)
+            result = {
+                "exchange": "Binance",
+                "data": map_result_fast(usdt_pairs),
+                "other": map_result_fast(other_pairs),
+                "total_volume": total_volume,
+                "volume_change": vol_change,
+                "ts": int(time.time() * 1000)
+            }
+            _cache[cache_key] = {"data": result, "ts": now}
+            return JSONResponse(content=result)
+    except Exception as e:
+        return JSONResponse(content={"exchange": "Binance", "data": [], "other": [], "error": str(e)}, status_code=500)
+
+
 async def fetch_fear_and_greed():
     """Fetch Fear and Greed Index."""
     cache_key = "fear_and_greed"

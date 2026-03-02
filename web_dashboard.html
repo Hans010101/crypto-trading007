@@ -1299,8 +1299,8 @@
     <!-- TABS & SEARCH -->
     <div class="tabs-area">
       <div class="tabs" id="tabs">
-        <button class="tab active" data-tab="market" id="tab-market">🔥 币安合约</button>
-        <button class="tab" data-tab="otherhot" id="tab-otherhot">🌟 热门新币</button>
+        <button class="tab active" data-tab="otherhot" id="tab-otherhot">🌟 热门新币</button>
+        <button class="tab" data-tab="market" id="tab-market">🔥 币安合约</button>
         <button class="tab" data-tab="grid" id="tab-grid">📉 网格交易</button>
         <button class="tab" data-tab="wash" id="tab-wash">🤖 刷量交易</button>
         <button class="tab" data-tab="arbitrage" id="tab-arbitrage">⚖️ 套利监控</button>
@@ -1321,7 +1321,7 @@
     </div>
 
     <!-- TAB: MARKET -->
-    <div class="tab-content active" id="content-market">
+    <div class="tab-content" id="content-market">
       <div class="table-container">
         <div class="table-header">
           <div class="table-title"><span class="icon">📊</span> Binance 合约 24H 涨幅 Top 100</div>
@@ -1356,7 +1356,7 @@
     </div>
 
     <!-- TAB: OTHER HOT -->
-    <div class="tab-content" id="content-otherhot">
+    <div class="tab-content active" id="content-otherhot">
       <div class="table-container">
         <div class="table-header">
           <div class="table-title"><span class="icon">🌟</span> 热门新币监控 (暂无资金费率/待上线)</div>
@@ -1375,13 +1375,12 @@
                     id="sort-arrow-other" style="font-size:0.8rem; margin-left:4px;">▼</span></th>
                 <th>24H最高</th>
                 <th>24H最低</th>
-                <th>账户多空比(L/S)</th>
                 <th>24H成交额</th>
               </tr>
             </thead>
             <tbody id="other-hot-tbody">
               <tr>
-                <td colspan="8" style="text-align:center;padding:2rem;color:var(--text-muted)">加载中 ...</td>
+                <td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">加载中 ...</td>
               </tr>
             </tbody>
           </table>
@@ -1808,12 +1807,12 @@
         if (displayOther.length === 0) {
           otherBody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text-muted)">未找到匹配的交易对</td></tr>';
         } else {
-          otherBody.innerHTML = displayOther.map(t => generateTickerRow(t, false, false)).join('');
+          otherBody.innerHTML = displayOther.map(t => generateTickerRow(t, false, false, true)).join('');
         }
       }
     }
 
-    function generateTickerRow(t, top3Rank = true, showFunding = true) {
+    function generateTickerRow(t, top3Rank = true, showFunding = true, hideLSRatio = false) {
       const chgClass = t.change24h >= 0 ? 'positive' : 'negative';
       const chgSign = t.change24h >= 0 ? '+' : '';
       const rankClass = (top3Rank && t.rank <= 3) ? 'rank top3' : 'rank';
@@ -1854,7 +1853,7 @@
       <td class="price">$${fmt(t.high24h)}</td>
       <td class="price">$${fmt(t.low24h)}</td>
       ${fundingHtml}
-      <td style="min-width:90px; vertical-align: middle;">${lsHtml}</td>
+      ${hideLSRatio ? '' : '<td style="min-width:90px; vertical-align: middle;">' + lsHtml + '</td>'}
       <td class="volume">$${fmtVol(t.volume24h)}</td>
     </tr>`;
     }
@@ -1869,6 +1868,47 @@
         }
       }
     });
+
+    // Fast tickers load (no L/S ratios - for instant display)
+    async function loadTickersFast() {
+      try {
+        const res = await fetch('/api/binance/tickers_fast');
+        const json = await res.json();
+        allTickersData = json.data || [];
+        otherHotData = json.other || [];
+        applySort(allTickersData);
+        applySort(otherHotData);
+        // Update stat cards
+        const btcData = allTickersData.find(d => d.symbol === 'BTC/USDT');
+        const ethData = allTickersData.find(d => d.symbol === 'ETH/USDT');
+        if (btcData) {
+          document.getElementById('stat-btc').textContent = '$' + fmt(btcData.price, 2);
+          const c = btcData.change24h;
+          document.getElementById('stat-btc-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
+          document.getElementById('stat-btc-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
+        }
+        if (ethData) {
+          document.getElementById('stat-eth').textContent = '$' + fmt(ethData.price, 2);
+          const c = ethData.change24h;
+          document.getElementById('stat-eth-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
+          document.getElementById('stat-eth-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
+        }
+        if (json.total_volume) document.getElementById('stat-volume').textContent = '$' + fmtVol(json.total_volume);
+        if (json.volume_change !== undefined) {
+          const c = json.volume_change;
+          const volSub = document.getElementById('stat-volume-sub');
+          volSub.textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
+          volSub.style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
+          volSub.style.fontWeight = '600';
+        }
+        renderTickers();
+        console.log('[Fast] Loaded', allTickersData.length, '+', otherHotData.length, 'pairs (no L/S)');
+      } catch (e) {
+        console.error('[Fast] Failed:', e);
+        // Fallback to full load
+        return loadTickers();
+      }
+    }
 
     async function loadTickers() {
       const btn = document.getElementById('btn-refresh-tickers');
@@ -2121,22 +2161,28 @@
       } catch (e) { console.error('BTC/ETH load error:', e); }
     }
 
+    // === Fast initial load (no L/S ratios, instant display) ===
     loadBtcEth();
-    loadTickers();
-    loadGridBacktest();
-    loadSystemInfo();
     loadFNG();
+    loadSystemInfo();
+    // Load quick otherhot data first (fast endpoint, no LS ratios)
+    loadTickersFast().then(() => {
+      // After fast data renders, pre-cache full tickers with L/S ratios in background
+      console.log('[Init] Fast data loaded, pre-caching full tickers in background...');
+      loadTickers();
+    });
 
-    // Load productized modules data
+    // Load other tab data lazily
+    loadGridBacktest();
     loadMockData('/api/wash/status', 'wash-tbody', renderWash);
     loadMockData('/api/arbitrage/opportunities', 'arb-tbody', renderArbitrage);
     loadMockData('/api/alerts/list', 'alerts-tbody', renderAlerts);
     loadMockData('/api/scanner/events', 'scanner-tbody', renderScanner);
 
-    // Auto-refresh every 15 seconds
+    // Auto-refresh
     setInterval(loadBtcEth, 15000);
-    setInterval(loadTickers, 15000);
-    setInterval(loadFNG, 60000); // Fear & Greed updates less frequently
+    setInterval(loadTickers, 30000); // Full tickers every 30s (includes L/S)
+    setInterval(loadFNG, 60000);
 
     // === SEARCH LOGIC ===
     const searchInput = document.getElementById('token-search-input');
