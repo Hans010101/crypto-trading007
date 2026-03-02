@@ -35,7 +35,7 @@ app.add_middleware(
 
 # Cache for market data
 _cache = {}
-_cache_ttl = 10  # seconds
+_cache_ttl = 15  # seconds
 
 
 async def fetch_ls_ratio_batch(symbols):
@@ -138,7 +138,7 @@ async def fetch_binance_tickers():
             other_pairs.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
             other_top100 = other_pairs
 
-            fetch_symbols = [t.get("symbol") for t in top100 + other_top100]
+            fetch_symbols = [t.get("symbol") for t in (top100 + other_top100)[:20]]
             ls_ratios = await fetch_ls_ratio_batch(fetch_symbols)
 
             def map_result(items):
@@ -795,6 +795,30 @@ async def api_ai_chat(request: Request):
 async def index():
     html_path = Path(__file__).parent / "web_dashboard.html"
     return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+
+
+# Proxy TradingView tv.js - self-host through HK server to bypass GFW
+_tv_js_cache = {"content": None, "ts": 0}
+
+@app.get("/static/tv.js")
+async def serve_tv_js():
+    from fastapi.responses import Response
+    now = time.time()
+    # Cache for 24 hours
+    if _tv_js_cache["content"] and now - _tv_js_cache["ts"] < 86400:
+        return Response(content=_tv_js_cache["content"], media_type="application/javascript",
+                       headers={"Cache-Control": "public, max-age=86400"})
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get("https://s3.tradingview.com/tv.js")
+            if resp.status_code == 200:
+                _tv_js_cache["content"] = resp.content
+                _tv_js_cache["ts"] = now
+                return Response(content=resp.content, media_type="application/javascript",
+                               headers={"Cache-Control": "public, max-age=86400"})
+    except Exception as e:
+        print(f"Failed to fetch tv.js: {e}")
+    return Response(content=b"// TradingView not available", status_code=503)
 
 
 if __name__ == "__main__":
