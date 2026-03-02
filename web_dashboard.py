@@ -29,87 +29,48 @@ import re
 app = FastAPI(title="多交易所策略自动化系统 Dashboard")
 
 def md_to_html(text):
-    """Convert markdown to HTML for chatbot responses (compact layout)."""
+    """Convert markdown to HTML matching AI analysis panel style."""
     if not text:
         return text
+    import re as _re
+    # Inline transforms first
+    text = _re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    text = _re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+    text = _re.sub(r'`([^`]+)`', r'<code style="background:rgba(0,0,0,0.05);padding:1px 3px;border-radius:3px;font-size:0.9em">\1</code>', text)
+    
     lines = text.split('\n')
-    html_parts = []
-    in_list = False
-    list_type = 'ul'
-    in_code = False
+    out = []
     for line in lines:
-        # Code blocks
-        if line.strip().startswith('```'):
-            if in_code:
-                html_parts.append('</code></pre>')
-                in_code = False
-            else:
-                html_parts.append('<pre><code>')
-                in_code = True
-            continue
-        if in_code:
-            html_parts.append(line + '\n')
-            continue
-        # Headers
-        if line.startswith('#### '):
-            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
-            html_parts.append(f'<div style="font-weight:700;font-size:0.95rem;margin:8px 0 4px;color:#333">{line[5:]}</div>')
-            continue
-        if line.startswith('### '):
-            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
-            html_parts.append(f'<div style="font-weight:700;font-size:1.05rem;margin:10px 0 4px;border-bottom:1px solid rgba(0,0,0,0.08);padding-bottom:3px">{line[4:]}</div>')
-            continue
-        if line.startswith('## '):
-            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
-            html_parts.append(f'<div style="font-weight:700;font-size:1.1rem;margin:10px 0 4px">{line[3:]}</div>')
-            continue
-        if line.startswith('# '):
-            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
-            html_parts.append(f'<div style="font-weight:700;font-size:1.15rem;margin:8px 0 4px">{line[2:]}</div>')
-            continue
-        # List items
-        m = re.match(r'^\s*[-*]\s+(.+)', line)
-        if m:
-            if not in_list:
-                list_type = 'ul'
-                html_parts.append('<ul style="margin:2px 0;padding-left:18px">')
-                in_list = True
-            html_parts.append(f'<li style="margin:1px 0">{m.group(1)}</li>')
-            continue
-        m2 = re.match(r'^\s*(\d+)\.\s+(.+)', line)
-        if m2:
-            if not in_list:
-                list_type = 'ol'
-                html_parts.append('<ol style="margin:2px 0;padding-left:18px">')
-                in_list = True
-            html_parts.append(f'<li style="margin:1px 0">{m2.group(2)}</li>')
+        stripped = line.strip()
+        if not stripped:
             continue
         # Horizontal rule
-        if line.strip() in ('---', '***', '___'):
-            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
-            html_parts.append('<hr style="border:none;border-top:1px solid rgba(0,0,0,0.1);margin:4px 0">')
+        if stripped in ('---', '***', '___'):
+            out.append('<hr style="border:none;border-top:1px solid rgba(0,0,0,0.08);margin:8px 0">')
             continue
-        # Close list on empty line
-        if in_list and line.strip() == '':
-            html_parts.append(f'</{list_type}>')
-            in_list = False
+        # Headers -> bold section titles (same as AI panel)
+        if stripped.startswith('#### '):
+            out.append(f'<strong style="color:var(--text-primary)">{stripped[5:]}</strong><br>')
             continue
-        # Empty line -> tiny break
-        if line.strip() == '':
-            html_parts.append('<div style="height:2px"></div>')
+        if stripped.startswith('### '):
+            out.append(f'<strong style="color:var(--text-primary)">{stripped[4:]}</strong><br>')
             continue
-        # Regular line
-        html_parts.append(f'{line}<br>')
-    if in_list:
-        html_parts.append(f'</{list_type}>')
-    if in_code:
-        html_parts.append('</code></pre>')
-    result = '\n'.join(html_parts)
-    # Inline: bold, italic, code
-    result = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', result)
-    result = re.sub(r'\*(.+?)\*', r'<em>\1</em>', result)
-    result = re.sub(r'`([^`]+)`', r'<code style="background:rgba(0,0,0,0.06);padding:1px 4px;border-radius:3px;font-size:0.9em">\1</code>', result)
-    return result
+        if stripped.startswith('## '):
+            out.append(f'<strong style="color:var(--text-primary)">{stripped[3:]}</strong><br>')
+            continue
+        if stripped.startswith('# '):
+            out.append(f'<strong style="color:var(--text-primary)">{stripped[2:]}</strong><br>')
+            continue
+        # Numbered headers like "1. Title" or "2. Title" at block level
+        m = _re.match(r'^(\d+)\.\s+(.+)', stripped)
+        if m and not any(c in m.group(2) for c in ['$', '：', ':']):
+            # Likely a section header
+            out.append(f'<br><strong style="color:var(--text-primary)"><span style="color:var(--accent-blue);margin-right:4px">{m.group(1)}.</span> {m.group(2)}</strong><br>')
+            continue
+        # Regular line - just append with <br>
+        out.append(f'{line}<br>')
+    
+    return '\n'.join(out)
 
 app.add_middleware(
     CORSMiddleware,
