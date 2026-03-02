@@ -84,14 +84,19 @@ def md_to_html(text):
                 in_list = True
             html_parts.append(f'<li style="margin:1px 0">{m2.group(2)}</li>')
             continue
+        # Horizontal rule
+        if line.strip() in ('---', '***', '___'):
+            if in_list: html_parts.append(f'</{list_type}>'); in_list = False
+            html_parts.append('<hr style="border:none;border-top:1px solid rgba(0,0,0,0.1);margin:4px 0">')
+            continue
         # Close list on empty line
         if in_list and line.strip() == '':
             html_parts.append(f'</{list_type}>')
             in_list = False
             continue
-        # Empty line -> small break
+        # Empty line -> tiny break
         if line.strip() == '':
-            html_parts.append('<div style="height:6px"></div>')
+            html_parts.append('<div style="height:2px"></div>')
             continue
         # Regular line
         html_parts.append(f'{line}<br>')
