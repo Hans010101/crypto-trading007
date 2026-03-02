@@ -1628,7 +1628,7 @@
   </div>
 
 
-  <script src="/static/tv.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
   <script>
     // === State ===
     let systemModulesData = [];
@@ -1693,45 +1693,62 @@
 
     function openChart(rawSymbol, exchange = 'BINANCE') {
       const sym = String(rawSymbol).replace('/', '');
-      const prefix = getExchangeTvPrefix(exchange);
 
-      // For Binance, K-lines for perpetual contracts in TradingView are strictly accessed with a '.P' suffix.
-      // Coins like YALA, PIPPIN are usually futures-only initially, so 'BINANCE:YALAUSDT' will return 'Symbol not found'
-      // while 'BINANCE:YALAUSDT.P' will successfully display the futures K-line.
-      let tvSymbol = `${prefix}:${sym}`;
-      if (prefix === 'BINANCE' && rawSymbol.includes('USDT')) {
-        // Special fallback for 1000x futures contracts which use PERP instead of .P
-        if (sym.startsWith('1000')) {
-          tvSymbol = `${prefix}:${sym}PERP`;
-        } else {
-          tvSymbol = `${prefix}:${sym}.P`; // Always use .P for Binance USDT futures to ensure compatibility with newly listed contracts
-        }
-      }
-
-      document.getElementById('chart-modal-title').innerHTML = `<span class="icon">📈</span> ${rawSymbol} 专业分析图表 (MACD & BOLL) - ${prefix}`;
+      document.getElementById('chart-modal-title').innerHTML = `<span class="icon">📈</span> ${rawSymbol} 专业分析图表 - ${exchange}`;
       document.getElementById('chart-modal').classList.add('active');
-      document.getElementById('tv-chart-container').innerHTML = '';
+      const container = document.getElementById('tv-chart-container');
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted)">加载K线数据中...</div>';
 
-      new TradingView.widget({
-        "autosize": true,
-        "symbol": tvSymbol,
-        "interval": "15",
-        "timezone": "Asia/Shanghai",
-        "theme": "light",
-        "style": "1",
-        "locale": "zh_CN",
-        "enable_publishing": false,
-        "backgroundColor": "#ffffff",
-        "gridColor": "#f1f3f6",
-        "hide_top_toolbar": false,
-        "hide_legend": false,
-        "save_image": false,
-        "container_id": "tv-chart-container",
-        "studies": [
-          "BB@tv-basicstudies",
-          "MACD@tv-basicstudies"
-        ]
-      });
+      // Fetch klines from our backend proxy
+      fetch(`/api/binance/klines?symbol=${sym}&interval=15m&limit=200`)
+        .then(res => res.json())
+        .then(data => {
+          if (!data || !data.length) {
+            container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--loss)">K线数据加载失败</div>';
+            return;
+          }
+          container.innerHTML = '';
+          const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: container.clientHeight,
+            layout: { background: { type: 'solid', color: '#1a1d29' }, textColor: '#d1d4dc' },
+            grid: { vertLines: { color: '#2B2B43' }, horzLines: { color: '#2B2B43' } },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            timeScale: { timeVisible: true, secondsVisible: false },
+          });
+          const candleSeries = chart.addCandlestickSeries({
+            upColor: '#26a69a', downColor: '#ef5350',
+            borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+            wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+          });
+          const volumeSeries = chart.addHistogramSeries({
+            priceFormat: { type: 'volume' },
+            priceScaleId: '',
+          });
+          chart.priceScale('').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+
+          const candles = data.map(k => ({
+            time: Math.floor(k[0] / 1000),
+            open: parseFloat(k[1]), high: parseFloat(k[2]),
+            low: parseFloat(k[3]), close: parseFloat(k[4]),
+          }));
+          const volumes = data.map(k => ({
+            time: Math.floor(k[0] / 1000),
+            value: parseFloat(k[5]),
+            color: parseFloat(k[4]) >= parseFloat(k[1]) ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
+          }));
+          candleSeries.setData(candles);
+          volumeSeries.setData(volumes);
+          chart.timeScale().fitContent();
+
+          // Responsive
+          new ResizeObserver(() => {
+            chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+          }).observe(container);
+        })
+        .catch(err => {
+          container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--loss)">K线数据请求失败: ' + err.message + '</div>';
+        });
 
       // Fetch AI Analysis
       const aiContainer = document.getElementById('ai-analysis-content');
@@ -2352,7 +2369,24 @@
 
         let mdText = data.reply || "抱歉，我现在无法回答。";
         // Parse markdown with marked.js
-        botDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(mdText) : mdText.replace(/\n/g, '<br>');
+        botDiv.innerHTML = (function (text) {
+          function simpleMd(t) {
+            return t
+              .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+              .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+              .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+              .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+              .replace(/\*(.+?)\*/g, '<em>$1</em>')
+              .replace(/`([^`]+)`/g, '<code>$1</code>')
+              .replace(/^- (.+)$/gm, '<li>$1</li>')
+              .replace(/\n{2,}/g, '</p><p>')
+              .replace(/\n/g, '<br>');
+          }
+          try {
+            if (typeof marked !== 'undefined' && marked.parse) return marked.parse(text);
+          } catch (e) { }
+          return simpleMd(text);
+        })(mdText);
 
         chatBody.appendChild(botDiv);
       } catch (err) {

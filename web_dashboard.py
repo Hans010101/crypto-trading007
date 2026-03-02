@@ -232,6 +232,19 @@ async def api_binance_tickers():
         "ts": int(time.time() * 1000)
     })
 
+@app.get("/api/binance/klines")
+async def api_binance_klines(symbol: str = "BTCUSDT", interval: str = "15m", limit: int = 200):
+    """Proxy Binance K-line data through HK server for China users."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://fapi.binance.com/fapi/v1/klines",
+                params={"symbol": symbol, "interval": interval, "limit": limit}
+            )
+            return JSONResponse(content=resp.json(), headers={"Cache-Control": "public, max-age=30"})
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
 @app.get("/api/binance/tickers_fast")
 async def api_binance_tickers_fast():
     """Fast endpoint: no L/S ratios, instant response for initial page load."""
