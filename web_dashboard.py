@@ -275,7 +275,7 @@ async def fetch_binance_tickers():
             result_main = map_result(top100, include_oi=True)
             result_other = map_result(other_top100, include_oi=False)
 
-total_volume = sum(float(t.get("quoteVolume", 0)) for t in usdt_pairs + other_pairs)
+            total_volume = sum(float(t.get("quoteVolume", 0)) for t in usdt_pairs + other_pairs)
 
             final_data = {
                 "data": result_main, 
