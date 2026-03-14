@@ -212,28 +212,38 @@ async def fetch_binance_tickers():
                         else:
                             usdt_pairs.append(t)
                         
-            usdt_pairs.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
+                        usdt_pairs.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
             top100 = usdt_pairs
-            
+
             other_pairs.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
             other_top100 = other_pairs
 
             fetch_symbols = [t.get("symbol") for t in (top100 + other_top100)[:20]]
             ls_ratios = await fetch_ls_ratio_batch(fetch_symbols)
 
-            # Fetch OI for top symbols concurrently
-            async def fetch_oi(client, sym):
+            # Fetch OI 24H change for top symbols concurrently
+            # Uses /futures/data/openInterestHist: 25 x 1h bars = current vs 24h ago
+            url_oi_hist = "https://fapi.binance.com/futures/data/openInterestHist"
+
+            async def fetch_oi_change(c, sym):
                 try:
-                    r = await client.get(url_oi, params={"symbol": sym})
+                    r = await c.get(url_oi_hist, params={
+                        "symbol": sym, "period": "1h", "limit": 25
+                    })
                     d = r.json()
-                    return sym, float(d.get("openInterest", 0))
+                    if isinstance(d, list) and len(d) >= 2:
+                        oi_now = float(d[-1].get("sumOpenInterest", 0))
+                        oi_24h = float(d[0].get("sumOpenInterest", 0))
+                        oi_val_usd = float(d[-1].get("sumOpenInterestValue", 0))
+                        change_pct = (oi_now - oi_24h) / oi_24h * 100 if oi_24h > 0 else 0.0
+                        return sym, {"change": change_pct, "value": oi_val_usd}
                 except:
-                    return sym, 0.0
+                    pass
+                return sym, {"change": 0.0, "value": 0.0}
 
             top_syms_for_oi = [t.get("symbol") for t in top100[:50]]
-            oi_tasks = [fetch_oi(client, s) for s in top_syms_for_oi]
-            oi_results = await asyncio.gather(*oi_tasks)
-            oi_map = {sym: oi for sym, oi in oi_results}
+            oi_results = await asyncio.gather(*[fetch_oi_change(client, s) for s in top_syms_for_oi])
+            oi_map = {sym: info for sym, info in oi_results}
 
             def map_result(items, include_oi=True):
                 res = []
@@ -243,8 +253,7 @@ async def fetch_binance_tickers():
                     interval = interval_map.get(sym, 8)
                     ls = ls_ratios.get(sym, {"ratio": 0, "long": 0, "short": 0})
                     price = float(t.get("lastPrice", 0))
-                    oi_contracts = oi_map.get(sym, 0.0) if include_oi else 0.0
-                    oi_usd = oi_contracts * price  # convert to USD value
+                    oi_info = oi_map.get(sym, {"change": 0.0, "value": 0.0}) if include_oi else {"change": 0.0, "value": 0.0}
                     res.append({
                         "rank": i + 1,
                         "symbol": sym.replace("USDT", "/USDT"),
@@ -258,14 +267,15 @@ async def fetch_binance_tickers():
                         "nextFundingTime": int(f_info.get("nextFundingTime", 0)),
                         "fundingInterval": interval,
                         "lsRatio": ls,
-                        "openInterest": oi_usd
+                        "oiChange24h": oi_info["change"],
+                        "oiValue": oi_info["value"]
                     })
                 return res
 
             result_main = map_result(top100, include_oi=True)
             result_other = map_result(other_top100, include_oi=False)
 
-            total_volume = sum(float(t.get("quoteVolume", 0)) for t in usdt_pairs + other_pairs)
+total_volume = sum(float(t.get("quoteVolume", 0)) for t in usdt_pairs + other_pairs)
 
             final_data = {
                 "data": result_main, 

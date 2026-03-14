@@ -1360,7 +1360,7 @@
                 <th>24H最低</th>
                 <th>资金费率 / 结算周期</th>
                 <th>账户多空比(L/S)</th>
-                <th title="Open Interest 未平仓合约数 (USD)">OI 持仓量</th>
+                <th title="OI 24H变化率，反映市场投機情绪变化">OI 24H变化</th>
                 <th>24H成交额</th>
               </tr>
             </thead>
@@ -2125,7 +2125,14 @@
       <td class="price">$${fmt(t.low24h)}</td>
       ${fundingHtml}
       ${hideLSRatio ? '' : '<td style="min-width:90px; vertical-align: middle;">' + lsHtml + '</td>'}
-      <td class="volume" title="OI 未平仓合约数">${t.openInterest && t.openInterest > 0 ? '$' + fmtVol(t.openInterest) : '<span style="color:var(--text-muted)">--</span>'}</td>
+      <td class="volume" title="OI 24H变化">${(function(){
+        if (!t.oiChange24h && t.oiChange24h !== 0) return '<span style="color:var(--text-muted)">--</span>';
+        const c = t.oiChange24h;
+        const color = c > 0 ? 'var(--gain)' : (c < 0 ? 'var(--loss)' : 'var(--text-muted)');
+        const sign = c > 0 ? '+' : '';
+        const oiVal = t.oiValue && t.oiValue > 0 ? '<br><span style="font-size:0.75rem;color:var(--text-muted)">$' + fmtVol(t.oiValue) + '</span>' : '';
+        return '<span style="color:' + color + ';font-weight:600">' + sign + c.toFixed(2) + '%</span>' + oiVal;
+      })()}</td>
       <td class="volume">$${fmtVol(t.volume24h)}</td>
     </tr>`;
     }
