@@ -1360,12 +1360,13 @@
                 <th>24H最低</th>
                 <th>资金费率 / 结算周期</th>
                 <th>账户多空比(L/S)</th>
+                <th title="Open Interest 未平仓合约数 (USD)">OI 持仓量</th>
                 <th>24H成交额</th>
               </tr>
             </thead>
             <tbody id="ticker-tbody">
               <tr>
-                <td colspan="9" style="text-align:center;padding:2rem;color:var(--text-muted)">加载中 ...</td>
+                <td colspan="10" style="text-align:center;padding:2rem;color:var(--text-muted)">加载中 ...</td>
               </tr>
             </tbody>
           </table>
@@ -2053,7 +2054,7 @@
       const otherBody = document.getElementById('other-hot-tbody');
 
       if (!allTickersData || allTickersData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--text-muted)">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--text-muted)">暂无数据</td></tr>';
       } else {
         let displayData = allTickersData;
         if (currentSearchQuery) {
@@ -2061,7 +2062,7 @@
         }
         displayData = displayData.slice(0, currentSearchQuery ? 100 : tickersDisplayCount);
         if (displayData.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--text-muted)">未找到匹配的交易对</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--text-muted)">未找到匹配的交易对</td></tr>';
         } else {
           tbody.innerHTML = displayData.map(t => generateTickerRow(t, !currentSearchQuery)).join('');
         }
@@ -2124,6 +2125,7 @@
       <td class="price">$${fmt(t.low24h)}</td>
       ${fundingHtml}
       ${hideLSRatio ? '' : '<td style="min-width:90px; vertical-align: middle;">' + lsHtml + '</td>'}
+      <td class="volume" title="OI 未平仓合约数">${t.openInterest && t.openInterest > 0 ? '$' + fmtVol(t.openInterest) : '<span style="color:var(--text-muted)">--</span>'}</td>
       <td class="volume">$${fmtVol(t.volume24h)}</td>
     </tr>`;
     }
@@ -2224,7 +2226,7 @@
       } catch (e) {
         console.error('Failed to load tickers:', e);
         document.getElementById('ticker-tbody').innerHTML =
-          `<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--accent-rose)">加载失败: ${e.message}</td></tr>`;
+          `<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--accent-rose)">加载失败: ${e.message}</td></tr>`;
       } finally {
         btn.classList.remove('loading');
       }

@@ -168,6 +168,7 @@ async def fetch_binance_tickers():
     url_funding = "https://fapi.binance.com/fapi/v1/premiumIndex"
     url_funding_info = "https://fapi.binance.com/fapi/v1/fundingInfo"
     url_btc_klines = "https://fapi.binance.com/fapi/v1/klines"
+    url_oi = "https://fapi.binance.com/fapi/v1/openInterest"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp_ticker, resp_funding, resp_info, resp_klines = await asyncio.gather(
@@ -220,17 +221,34 @@ async def fetch_binance_tickers():
             fetch_symbols = [t.get("symbol") for t in (top100 + other_top100)[:20]]
             ls_ratios = await fetch_ls_ratio_batch(fetch_symbols)
 
-            def map_result(items):
+            # Fetch OI for top symbols concurrently
+            async def fetch_oi(client, sym):
+                try:
+                    r = await client.get(url_oi, params={"symbol": sym})
+                    d = r.json()
+                    return sym, float(d.get("openInterest", 0))
+                except:
+                    return sym, 0.0
+
+            top_syms_for_oi = [t.get("symbol") for t in top100[:50]]
+            oi_tasks = [fetch_oi(client, s) for s in top_syms_for_oi]
+            oi_results = await asyncio.gather(*oi_tasks)
+            oi_map = {sym: oi for sym, oi in oi_results}
+
+            def map_result(items, include_oi=True):
                 res = []
                 for i, t in enumerate(items):
                     sym = t.get("symbol", "")
                     f_info = funding_map.get(sym, {})
                     interval = interval_map.get(sym, 8)
                     ls = ls_ratios.get(sym, {"ratio": 0, "long": 0, "short": 0})
+                    price = float(t.get("lastPrice", 0))
+                    oi_contracts = oi_map.get(sym, 0.0) if include_oi else 0.0
+                    oi_usd = oi_contracts * price  # convert to USD value
                     res.append({
                         "rank": i + 1,
                         "symbol": sym.replace("USDT", "/USDT"),
-                        "price": float(t.get("lastPrice", 0)),
+                        "price": price,
                         "change24h": float(t.get("priceChangePercent", 0)),
                         "high24h": float(t.get("highPrice", 0)),
                         "low24h": float(t.get("lowPrice", 0)),
@@ -239,12 +257,13 @@ async def fetch_binance_tickers():
                         "fundingRate": float(f_info.get("lastFundingRate", 0)),
                         "nextFundingTime": int(f_info.get("nextFundingTime", 0)),
                         "fundingInterval": interval,
-                        "lsRatio": ls
+                        "lsRatio": ls,
+                        "openInterest": oi_usd
                     })
                 return res
 
-            result_main = map_result(top100)
-            result_other = map_result(other_top100)
+            result_main = map_result(top100, include_oi=True)
+            result_other = map_result(other_top100, include_oi=False)
 
             total_volume = sum(float(t.get("quoteVolume", 0)) for t in usdt_pairs + other_pairs)
 
@@ -336,6 +355,7 @@ async def api_binance_tickers_fast():
     url_funding = "https://fapi.binance.com/fapi/v1/premiumIndex"
     url_funding_info = "https://fapi.binance.com/fapi/v1/fundingInfo"
     url_btc_klines = "https://fapi.binance.com/fapi/v1/klines"
+    url_oi = "https://fapi.binance.com/fapi/v1/openInterest"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp_ticker, resp_funding, resp_info, resp_klines = await asyncio.gather(
