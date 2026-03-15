@@ -2,6 +2,7 @@ const CORS = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin'
 
 async function fetchLSRatios(symbols) {
   const results = {};
+  // Fetch all symbols concurrently (VPN environment, no GFW limit)
   const fetches = symbols.map(sym =>
     fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=5m&limit=1`)
       .then(r => r.json())
@@ -9,10 +10,34 @@ async function fetchLSRatios(symbols) {
         if (Array.isArray(data) && data.length > 0) {
           let ratio = parseFloat(data[0].longShortRatio || 0);
           if (!isFinite(ratio)) ratio = 9999;
-          results[sym] = { ratio, long: parseFloat(data[0].longAccount || 0) * 100, short: parseFloat(data[0].shortAccount || 0) * 100 };
+          results[sym] = {
+            ratio,
+            long: parseFloat(data[0].longAccount || 0) * 100,
+            short: parseFloat(data[0].shortAccount || 0) * 100,
+          };
         }
       })
-      .catch(() => {})
+      .catch(() => { })
+  );
+  await Promise.all(fetches);
+  return results;
+}
+
+async function fetchOIChanges(symbols) {
+  const results = {};
+  const fetches = symbols.map(sym =>
+    fetch(`https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1h&limit=25`)
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data) && data.length >= 2) {
+          const oiNow = parseFloat(data[data.length - 1].sumOpenInterest || 0);
+          const oi24h = parseFloat(data[0].sumOpenInterest || 0);
+          const oiValUsd = parseFloat(data[data.length - 1].sumOpenInterestValue || 0);
+          const changePct = oi24h > 0 ? (oiNow - oi24h) / oi24h * 100 : 0;
+          results[sym] = { change: changePct, value: oiValUsd };
+        }
+      })
+      .catch(() => { })
   );
   await Promise.all(fetches);
   return results;
@@ -56,14 +81,26 @@ export async function onRequestGet() {
     usdtPairs.sort((a, b) => parseFloat(b.priceChangePercent || 0) - parseFloat(a.priceChangePercent || 0));
     otherPairs.sort((a, b) => parseFloat(b.priceChangePercent || 0) - parseFloat(a.priceChangePercent || 0));
 
-    const fetchSymbols = [...usdtPairs, ...otherPairs].map(t => t.symbol);
-    const lsRatios = await fetchLSRatios(fetchSymbols.slice(0, 40));
+    // Fetch L/S for ALL usdtPairs (full data, VPN env)
+    const mainSymbols = usdtPairs.map(t => t.symbol);
+    const otherSymbols = otherPairs.map(t => t.symbol);
+
+    // Run L/S and OI fetches concurrently
+    const [lsRatios, oiChanges] = await Promise.all([
+      fetchLSRatios(mainSymbols),   // all main symbols
+      fetchOIChanges(mainSymbols),  // all main symbols for OI
+    ]);
+
+    // L/S for other hot (limited since they don't have OI)
+    const lsRatiosOther = await fetchLSRatios(otherSymbols.slice(0, 30));
+
     const totalVolume = [...usdtPairs, ...otherPairs].reduce((s, t) => s + parseFloat(t.quoteVolume || 0), 0);
 
-    const mapResult = (items) => items.map((t, i) => {
+    const mapResult = (items, includeOi = true, lsMap = lsRatios) => items.map((t, i) => {
       const sym = t.symbol || '';
       const fInfo = fundingMap[sym] || {};
-      const ls = lsRatios[sym] || { ratio: 0, long: 0, short: 0 };
+      const ls = lsMap[sym] || { ratio: 0, long: 0, short: 0 };
+      const oi = includeOi ? (oiChanges[sym] || { change: 0, value: 0 }) : { change: 0, value: 0 };
       return {
         rank: i + 1,
         symbol: sym.replace('USDT', '/USDT'),
@@ -77,13 +114,15 @@ export async function onRequestGet() {
         nextFundingTime: parseInt(fInfo.nextFundingTime || 0),
         fundingInterval: intervalMap[sym] || 8,
         lsRatio: ls,
+        oiChange24h: oi.change,
+        oiValue: oi.value,
       };
     });
 
     return new Response(JSON.stringify({
       exchange: 'Binance',
-      data: mapResult(usdtPairs),
-      other: mapResult(otherPairs),
+      data: mapResult(usdtPairs, true, lsRatios),
+      other: mapResult(otherPairs, false, lsRatiosOther),
       total_volume: totalVolume,
       volume_change: volChange,
       ts: Date.now(),
