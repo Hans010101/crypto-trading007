@@ -1907,6 +1907,9 @@
     let currentSearchQuery = '';
 
     function renderTickers() {
+      // Always merge global caches before rendering - ensures L/S + OI never disappear
+      mergeGlobalCaches(allTickersData);
+      mergeGlobalCaches(otherHotData);
       const tbody = document.getElementById('ticker-tbody');
       const otherBody = document.getElementById('other-hot-tbody');
 
