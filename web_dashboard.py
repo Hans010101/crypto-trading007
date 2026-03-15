@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 多交易所策略自动化系统 - Web Dashboard
 提供浏览器可访问的实时市场数据仪表板
@@ -120,13 +120,13 @@ _cache_ttl = 15  # seconds
 async def fetch_ls_ratio_batch(symbols):
     cache_key = "ls_ratio_batch"
     now = time.time()
-    # Cache for 5 minutes since these don't change extremely quickly and rate limit is high
-    if cache_key in _cache and now - _cache[cache_key]["ts"] < 300:
+    # Cache for 60 seconds - freshness over rate-limit worry (VPN env)
+    if cache_key in _cache and now - _cache[cache_key]["ts"] < 60:
         return _cache[cache_key]["data"]
 
     url = "https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
     result = {}
-    sem = asyncio.Semaphore(20)
+    sem = asyncio.Semaphore(50)
 
     async def fetch_single(client, symbol):
         async with sem:
@@ -146,7 +146,10 @@ async def fetch_ls_ratio_batch(symbols):
                 pass
 
     try:
-        async with httpx.AsyncClient(timeout=15, limits=httpx.Limits(max_connections=20)) as client:
+        async with httpx.AsyncClient(
+            timeout=20,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=50)
+        ) as client:
             tasks = [fetch_single(client, sym) for sym in symbols]
             await asyncio.gather(*tasks)
             if result:
@@ -218,10 +221,11 @@ async def fetch_binance_tickers():
             other_pairs.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
             other_top100 = other_pairs
 
-            fetch_symbols = [t.get("symbol") for t in (top100 + other_top100)[:20]]
+            # Fetch L/S ratios for ALL top100 symbols (full data, VPN environment)
+            fetch_symbols = [t.get("symbol") for t in top100]
             ls_ratios = await fetch_ls_ratio_batch(fetch_symbols)
 
-            # Fetch OI 24H change for top symbols concurrently
+            # Fetch OI 24H change for ALL top100 symbols concurrently
             # Uses /futures/data/openInterestHist: 25 x 1h bars = current vs 24h ago
             url_oi_hist = "https://fapi.binance.com/futures/data/openInterestHist"
 
@@ -241,7 +245,8 @@ async def fetch_binance_tickers():
                     pass
                 return sym, {"change": 0.0, "value": 0.0}
 
-            top_syms_for_oi = [t.get("symbol") for t in top100[:50]]
+            # Fetch OI for all top100 (not just 50)
+            top_syms_for_oi = [t.get("symbol") for t in top100]
             oi_results = await asyncio.gather(*[fetch_oi_change(client, s) for s in top_syms_for_oi])
             oi_map = {sym: info for sym, info in oi_results}
 

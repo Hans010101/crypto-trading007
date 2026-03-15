@@ -6,11 +6,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Crypto Trading</title>
   <meta name="description" content="企业级多交易所加密货币自动化交易系统实时监控仪表板">
-  <link rel="preconnect" href="https://fonts.loli.net" crossorigin>
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet"
-    href="https://fonts.loli.net/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
     media="print" onload="this.media='all'">
-  <script src="https://lf26-cdn-tos.bytecdntp.com/cdn/expire-1-M/marked/4.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.0.2/marked.min.js"></script>
   <style>
     /* Markdown Styles for Chatbot - Match AI Analysis Panel */
     .chat-msg.bot {
@@ -1317,8 +1318,8 @@
     <!-- TABS & SEARCH -->
     <div class="tabs-area">
       <div class="tabs" id="tabs">
-        <button class="tab active" data-tab="otherhot" id="tab-otherhot">🌟 热门新币</button>
-        <button class="tab" data-tab="market" id="tab-market">🔥 币安合约</button>
+        <button class="tab active" data-tab="market" id="tab-market">🔥 币安合约</button>
+        <button class="tab" data-tab="otherhot" id="tab-otherhot">🌟 热门新币</button>
         <button class="tab" data-tab="grid" id="tab-grid">📉 网格交易</button>
         <button class="tab" data-tab="wash" id="tab-wash">🤖 刷量交易</button>
         <button class="tab" data-tab="arbitrage" id="tab-arbitrage">⚖️ 套利监控</button>
@@ -1339,7 +1340,7 @@
     </div>
 
     <!-- TAB: MARKET -->
-    <div class="tab-content" id="content-market">
+    <div class="tab-content active" id="content-market">
       <div class="table-container">
         <div class="table-header">
           <div class="table-title"><span class="icon">📊</span> Binance 合约 24H 涨幅 Top 100</div>
@@ -1360,7 +1361,7 @@
                 <th>24H最低</th>
                 <th>资金费率 / 结算周期</th>
                 <th>账户多空比(L/S)</th>
-                <th title="OI 24H变化率，反映市场投機情绪变化">OI 24H变化</th>
+                <th title="OI 24H变化率，反映市场持仓情绪变化" style="cursor:pointer; user-select:none;" onclick="toggleOiSort()" id="th-oi-change">OI 24H变化 <span id="oi-sort-arrow" style="font-size:0.8rem; margin-left:4px;">▼</span></th>
                 <th>24H成交额</th>
               </tr>
             </thead>
@@ -1375,7 +1376,7 @@
     </div>
 
     <!-- TAB: OTHER HOT -->
-    <div class="tab-content active" id="content-otherhot">
+    <div class="tab-content" id="content-otherhot">
       <div class="table-container">
         <div class="table-header">
           <div class="table-title"><span class="icon">🌟</span> 热门新币监控 (暂无资金费率/待上线)</div>
@@ -1569,9 +1570,7 @@
 
   </main>
 
-  <footer class="footer">
-    多交易所策略自动化系统 &copy; 2025 &mdash; 企业级加密货币自动化交易系统
-  </footer>
+
 
   <!-- MODAL -->
   <div class="modal-overlay" id="module-modal">
@@ -1647,32 +1646,58 @@
   </div>
 
 
-  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://s3.tradingview.com/tv.js"></script>
   <script>
     // === State ===
     let systemModulesData = [];
     let allTickersData = [];
     let otherHotData = [];
     let tickersDisplayCount = 30; // Max items to display initially
-    let currentSort = 'desc';
+    let currentSort = 'desc';  // 'desc' | 'asc'
+    let currentSortField = 'change24h'; // 'change24h' | 'oiChange24h'
 
     function applySort(data) {
       if (!data) return;
-      data.sort((a, b) => currentSort === 'desc' ? b.change24h - a.change24h : a.change24h - b.change24h);
+      const field = currentSortField;
+      const dir = (field === 'oiChange24h') ? currentOiSort : currentSort;
+      data.sort((a, b) => dir === 'desc' ? (b[field] || 0) - (a[field] || 0) : (a[field] || 0) - (b[field] || 0));
       data.forEach((t, i) => t.rank = i + 1);
     }
 
+    let currentOiSort = 'desc'; // 'desc' | 'asc'
+
     function toggleSort() {
+      currentSortField = 'change24h';
       currentSort = currentSort === 'desc' ? 'asc' : 'desc';
+      // Update 24H change arrows
       const arrow1 = document.getElementById('sort-arrow');
       if (arrow1) arrow1.textContent = currentSort === 'desc' ? '▼' : '▲';
       const arrow2 = document.getElementById('sort-arrow-other');
       if (arrow2) arrow2.textContent = currentSort === 'desc' ? '▼' : '▲';
+      // Reset OI arrow
+      const oiArrow = document.getElementById('oi-sort-arrow');
+      if (oiArrow) oiArrow.textContent = '▼';
 
       applySort(allTickersData);
       applySort(otherHotData);
+      tickersDisplayCount = 30;
+      renderTickers();
+    }
 
-      tickersDisplayCount = 30; // Reset scroll count on sort
+    function toggleOiSort() {
+      currentSortField = 'oiChange24h';
+      currentOiSort = currentOiSort === 'desc' ? 'asc' : 'desc';
+      // Update OI arrow
+      const oiArrow = document.getElementById('oi-sort-arrow');
+      if (oiArrow) oiArrow.textContent = currentOiSort === 'desc' ? '▼' : '▲';
+      // Reset 24H change arrows to neutral
+      const arrow1 = document.getElementById('sort-arrow');
+      if (arrow1) arrow1.textContent = '—';
+      const arrow2 = document.getElementById('sort-arrow-other');
+      if (arrow2) arrow2.textContent = '—';
+
+      applySort(allTickersData);
+      tickersDisplayCount = 30;
       renderTickers();
     }
 
@@ -1711,20 +1736,29 @@
     }
 
     let _currentChartSymbol = '';
-    let _currentChartInterval = '15m';
+    let _currentChartInterval = '15';
+    let _tvWidget = null;
+
+    // Map interval string to TradingView interval format
+    function toTvInterval(iv) {
+      const map = { '1m':'1','3m':'3','5m':'5','15m':'15','30m':'30','1h':'60','2h':'120','4h':'240','6h':'360','12h':'720','1d':'D','1w':'W' };
+      return map[iv] || iv;
+    }
 
     function openChart(rawSymbol, exchange = 'BINANCE') {
       _currentChartSymbol = String(rawSymbol).replace('/', '');
-      _currentChartInterval = '15m';
+      _currentChartInterval = '15';
 
-      document.getElementById('chart-modal-title').innerHTML = `<span class="icon">📈</span> ${rawSymbol} 专业分析图表 (MACD & BOLL) - ${exchange}`;
+      document.getElementById('chart-modal-title').innerHTML =
+        `<span class="icon">📈</span> ${rawSymbol} 专业分析图表 (MACD & BOLL) - ${exchange}`;
       document.getElementById('chart-modal').classList.add('active');
-      renderChart(_currentChartSymbol, _currentChartInterval);
+
+      // Small delay to ensure modal is visible before TradingView mounts
+      setTimeout(() => renderChart(_currentChartSymbol, _currentChartInterval), 80);
 
       // Fetch AI Analysis
       const aiContainer = document.getElementById('ai-analysis-content');
       aiContainer.innerHTML = '正在极速同步切片数据并唤醒深度分析引擎...';
-
       fetch('/api/ai/analysis?symbol=' + encodeURIComponent(rawSymbol))
         .then(res => res.json())
         .then(data => {
@@ -1734,296 +1768,114 @@
             aiContainer.innerHTML = '<span style="color:var(--loss)">模型生成超时，请稍后再试。</span>';
           }
         })
-        .catch(err => {
+        .catch(() => {
           aiContainer.innerHTML = '<span style="color:var(--loss)">网络连接中断，无法触达分析核心。</span>';
         });
     }
 
     function switchInterval(interval) {
-      _currentChartInterval = interval;
-      renderChart(_currentChartSymbol, interval);
+      _currentChartInterval = toTvInterval(interval);
+      if (_tvWidget && _tvWidget.activeChart) {
+        try { _tvWidget.activeChart().setResolution(_currentChartInterval); } catch(e) {}
+      }
     }
 
     function renderChart(sym, interval) {
       const container = document.getElementById('tv-chart-container');
-      container.innerHTML = '';
+      container.innerHTML = '<div id="tradingview_chart" style="width:100%;height:100%;"></div>';
 
-      // Auto-detect price precision
-      function getPrecision(price) {
-        if (price >= 100) return 2;
-        if (price >= 1) return 4;
-        if (price >= 0.01) return 6;
-        if (price >= 0.0001) return 8;
-        return 10;
-      }
-      function getMinMove(price) {
-        var p = getPrecision(price);
-        return parseFloat('1e-' + p);
+      // Destroy previous widget if any
+      if (_tvWidget) { try { _tvWidget.remove(); } catch(e) {} _tvWidget = null; }
+
+      if (typeof TradingView === 'undefined') {
+        container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ef5350;font-size:1rem;">TradingView 库加载失败，请检查网络连接后刷新。</div>';
+        return;
       }
 
-      // Toolbar
-      const toolbar = document.createElement('div');
-      toolbar.style.cssText = 'display:flex;gap:4px;padding:6px 10px;background:#fff;border-bottom:1px solid #e0e3eb;align-items:center;flex-shrink:0;flex-wrap:wrap;';
-      const intervals = [['1m', '1分'], ['15m', '15分'], ['1h', '1小时'], ['4h', '4小时'], ['1d', '日线']];
-      intervals.forEach(function (item) {
-        var val = item[0], label = item[1];
-        var btn = document.createElement('button');
-        btn.textContent = label;
-        btn.style.cssText = 'padding:3px 10px;border:1px solid ' + (val === interval ? '#2962FF' : '#e0e3eb') + ';background:' + (val === interval ? '#2962FF' : '#f8f9fd') + ';color:' + (val === interval ? '#fff' : '#131722') + ';border-radius:4px;cursor:pointer;font-size:12px;';
-        btn.onclick = function () { switchInterval(val); };
-        toolbar.appendChild(btn);
+      _tvWidget = new TradingView.widget({
+        container_id: 'tradingview_chart',
+        width: '100%',
+        height: '100%',
+        autosize: true,
+        symbol: 'BINANCE:' + sym + '.P',
+        interval: interval,
+        timezone: 'Asia/Shanghai',
+        theme: 'light',
+        style: '1',            // Candlestick
+        locale: 'zh_CN',
+        toolbar_bg: '#f8f9fd',
+        enable_publishing: false,
+        hide_top_toolbar: false,
+        hide_legend: false,
+        hide_side_toolbar: false,
+        allow_symbol_change: true,
+        save_image: true,
+        withdateranges: true,
+        show_popup_button: false,
+        popup_width: '1000',
+        popup_height: '650',
+        studies: [
+          { id: 'BB@tv-basicstudies', inputs: { length: 20, mult: 2 } },
+          { id: 'MACD@tv-basicstudies', inputs: { fast_length: 12, slow_length: 26, signal_smoothing: 9 } },
+          { id: 'Volume@tv-basicstudies' }
+        ],
+        overrides: {
+          'mainSeriesProperties.candleStyle.upColor': '#26a69a',
+          'mainSeriesProperties.candleStyle.downColor': '#ef5350',
+          'mainSeriesProperties.candleStyle.borderUpColor': '#26a69a',
+          'mainSeriesProperties.candleStyle.borderDownColor': '#ef5350',
+          'mainSeriesProperties.candleStyle.wickUpColor': '#26a69a',
+          'mainSeriesProperties.candleStyle.wickDownColor': '#ef5350',
+        },
+        loading_screen: { backgroundColor: '#ffffff', foregroundColor: '#2962FF' },
+        custom_css_url: '',
       });
-      // Separator
-      var sep1 = document.createElement('span');
-      sep1.style.cssText = 'width:1px;height:18px;background:#e0e3eb;margin:0 4px;';
-      toolbar.appendChild(sep1);
-      // Indicator buttons
-      var indBtns = ['\u2197 BB', '\u2193 MACD', '\ud83d\udcca Vol'];
-      indBtns.forEach(function (label) {
-        var ibtn = document.createElement('span');
-        ibtn.textContent = label;
-        ibtn.style.cssText = 'padding:2px 8px;font-size:11px;color:#2962FF;cursor:default;background:#f0f4ff;border-radius:3px;';
-        toolbar.appendChild(ibtn);
+
+      // Set pane height proportions: K-line 60%, MACD 20%, Volume 20%
+      // onChartReady fires when main chart is ready, but MACD/Volume panes are created
+      // asynchronously after studies load. We retry until all 3 panes exist.
+      _tvWidget.onChartReady(function () {
+        var maxRetries = 12;
+        var retryInterval = 700; // ms
+
+        function applyPaneHeights(attemptsLeft) {
+          try {
+            var chart = typeof _tvWidget.chart === 'function'
+              ? _tvWidget.chart()
+              : _tvWidget.activeChart();
+            var panes = chart.getPanes();
+
+            // Wait until all 3 panes (Main + MACD + Volume) are created
+            if (panes.length < 3 && attemptsLeft > 0) {
+              setTimeout(function () { applyPaneHeights(attemptsLeft - 1); }, retryInterval);
+              return;
+            }
+
+            var containerH = document.getElementById('tv-chart-container').clientHeight || 700;
+            // Subtract top toolbar (~40px) + bottom date bar (~32px) + padding
+            var chartH = Math.max(containerH - 80, 380);
+            var ratios = [0.60, 0.20, 0.20];
+
+            panes.forEach(function (pane, i) {
+              var r = ratios[i] !== undefined ? ratios[i] : (1 / panes.length);
+              var px = Math.floor(chartH * r);
+              if (typeof pane.setHeight === 'function') {
+                pane.setHeight(px);
+              }
+            });
+          } catch (e) {
+            // API not available or chart destroyed – silently skip
+          }
+        }
+
+        // Start first attempt after a brief delay to let studies initialize
+        setTimeout(function () { applyPaneHeights(maxRetries); }, 800);
       });
-      var infoSpan = document.createElement('span');
-      infoSpan.style.cssText = 'margin-left:auto;color:#787B86;font-size:11px;';
-      infoSpan.textContent = sym + ' \u00b7 Binance Futures \u00b7 ' + intervals.find(function (i) { return i[0] === interval; })[1];
-      toolbar.appendChild(infoSpan);
-      container.appendChild(toolbar);
-
-      // Info overlay
-      var infoOverlay = document.createElement('div');
-      infoOverlay.style.cssText = 'padding:3px 10px;background:#fff;font-size:11px;color:#787B86;flex-shrink:0;line-height:1.5;';
-      infoOverlay.id = 'chart-info-overlay';
-      infoOverlay.innerHTML = '<span style="color:#131722;font-weight:600">' + sym + '</span> loading...';
-      container.appendChild(infoOverlay);
-
-      // Main chart area (75%)
-      var mainArea = document.createElement('div');
-      mainArea.style.cssText = 'flex:3;position:relative;min-height:0;';
-      container.appendChild(mainArea);
-
-      // Divider
-      var divider = document.createElement('div');
-      divider.style.cssText = 'height:1px;background:#e0e3eb;flex-shrink:0;';
-      container.appendChild(divider);
-
-      // MACD label
-      var macdLabel = document.createElement('div');
-      macdLabel.style.cssText = 'padding:2px 10px;background:#fff;font-size:10px;color:#787B86;flex-shrink:0;';
-      macdLabel.id = 'macd-info-label';
-      macdLabel.innerHTML = 'MACD 12 26 close 9';
-      container.appendChild(macdLabel);
-
-      // MACD area (25%)
-      var macdArea = document.createElement('div');
-      macdArea.style.cssText = 'flex:1;position:relative;min-height:0;';
-      container.appendChild(macdArea);
-
-      mainArea.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#787B86">加载K线数据中...</div>';
-
-      fetch('/api/binance/klines?symbol=' + sym + '&interval=' + interval + '&limit=500')
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          if (!data || !data.length) {
-            mainArea.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ef5350">K线数据加载失败</div>';
-            return;
-          }
-          mainArea.innerHTML = '';
-
-          var samplePrice = parseFloat(data[data.length - 1][4]);
-          var pricePrecision = getPrecision(samplePrice);
-          var priceMinMove = getMinMove(samplePrice);
-
-          var chartOpts = {
-            layout: { background: { type: 'solid', color: '#ffffff' }, textColor: '#131722', fontSize: 11 },
-            grid: { vertLines: { color: '#f0f3fa' }, horzLines: { color: '#f0f3fa' } },
-            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            rightPriceScale: { borderColor: '#e0e3eb', autoScale: true },
-            timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#e0e3eb' },
-          };
-
-          // === MAIN CHART ===
-          var mainChart = LightweightCharts.createChart(mainArea, Object.assign({}, chartOpts, { width: mainArea.clientWidth, height: mainArea.clientHeight }));
-
-          var candles = data.map(function (k) {
-            return {
-              time: Math.floor(k[0] / 1000),
-              open: parseFloat(k[1]), high: parseFloat(k[2]),
-              low: parseFloat(k[3]), close: parseFloat(k[4]),
-            };
-          });
-          var closes = candles.map(function (c) { return c.close; });
-
-          // Candlestick with correct precision
-          var candleSeries = mainChart.addCandlestickSeries({
-            upColor: '#26a69a', downColor: '#ef5350',
-            borderUpColor: '#26a69a', borderDownColor: '#ef5350',
-            wickUpColor: '#26a69a', wickDownColor: '#ef5350',
-            priceFormat: { type: 'price', precision: pricePrecision, minMove: priceMinMove },
-          });
-          candleSeries.setData(candles);
-
-          // Bollinger Bands (20, 2)
-          var bbPeriod = 20, bbStdDev = 2;
-          var bbUpper = [], bbMiddle = [], bbLower = [];
-          for (var i = 0; i < candles.length; i++) {
-            if (i < bbPeriod - 1) continue;
-            var slice = closes.slice(i - bbPeriod + 1, i + 1);
-            var mean = slice.reduce(function (a, b) { return a + b; }, 0) / bbPeriod;
-            var std = Math.sqrt(slice.reduce(function (s, v) { return s + Math.pow(v - mean, 2); }, 0) / bbPeriod);
-            var t = candles[i].time;
-            bbUpper.push({ time: t, value: mean + bbStdDev * std });
-            bbMiddle.push({ time: t, value: mean });
-            bbLower.push({ time: t, value: mean - bbStdDev * std });
-          }
-
-          // BB fill - upper area (light blue fill from upper band down)
-          var bbAreaUpper = mainChart.addAreaSeries({
-            topColor: 'rgba(33, 150, 243, 0.15)',
-            bottomColor: 'rgba(33, 150, 243, 0.0)',
-            lineColor: 'rgba(33, 150, 243, 0.6)',
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          });
-          bbAreaUpper.setData(bbUpper);
-
-          // BB fill - lower area (to create the fill effect)
-          var bbAreaLower = mainChart.addAreaSeries({
-            topColor: 'rgba(33, 150, 243, 0.0)',
-            bottomColor: 'rgba(33, 150, 243, 0.15)',
-            lineColor: 'rgba(33, 150, 243, 0.6)',
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          });
-          bbAreaLower.setData(bbLower);
-
-          // BB middle line
-          mainChart.addLineSeries({
-            color: 'rgba(255, 152, 0, 0.7)',
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          }).setData(bbMiddle);
-
-          // Volume
-          var volumeSeries = mainChart.addHistogramSeries({
-            priceFormat: { type: 'volume' },
-            priceScaleId: 'vol',
-          });
-          mainChart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-          volumeSeries.setData(data.map(function (k) {
-            return {
-              time: Math.floor(k[0] / 1000),
-              value: parseFloat(k[5]),
-              color: parseFloat(k[4]) >= parseFloat(k[1]) ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)',
-            };
-          }));
-
-          // Update info overlay
-          var last = candles[candles.length - 1];
-          var lastBB = bbUpper.length > 0 ? { u: bbUpper[bbUpper.length - 1].value, m: bbMiddle[bbMiddle.length - 1].value, l: bbLower[bbLower.length - 1].value } : null;
-          var chg = last.close - last.open;
-          var chgPct = ((chg / last.open) * 100).toFixed(2);
-          var chgColor = chg >= 0 ? '#26a69a' : '#ef5350';
-          var fp = function (v) { return v.toFixed(pricePrecision); };
-          var infoHTML = '<span style="color:#131722;font-weight:600">\u25cf ' + sym + ' / TetherUS PERPETUAL \u00b7 Binance</span>';
-          infoHTML += ' &nbsp; <span style="color:#131722">' + fp(last.close) + '</span>';
-          infoHTML += ' <span style="color:' + chgColor + '">' + (chg >= 0 ? '+' : '') + fp(chg) + ' (' + (chg >= 0 ? '+' : '') + chgPct + '%)</span>';
-          infoHTML += '<br><span style="color:#787B86">开=</span>' + fp(last.open);
-          infoHTML += ' <span style="color:#787B86">高=</span>' + fp(last.high);
-          infoHTML += ' <span style="color:#787B86">低=</span>' + fp(last.low);
-          infoHTML += ' <span style="color:#787B86">收=</span><span style="color:' + chgColor + '">' + fp(last.close) + '</span>';
-          if (lastBB) {
-            infoHTML += '<br><span style="color:#787B86">BB 20 close 2</span> <span style="color:#ef5350">' + fp(lastBB.u) + '</span> <span style="color:#FF9800">' + fp(lastBB.m) + '</span> <span style="color:#2196F3">' + fp(lastBB.l) + '</span>';
-          }
-          var volLast = parseFloat(data[data.length - 1][5]);
-          var volStr = volLast >= 1e6 ? (volLast / 1e6).toFixed(2) + 'M' : (volLast / 1e3).toFixed(2) + 'K';
-          infoHTML += ' &nbsp; <span style="color:#787B86">Vol</span> <span style="color:' + chgColor + '">' + volStr + '</span>';
-          document.getElementById('chart-info-overlay').innerHTML = infoHTML;
-
-          mainChart.timeScale().fitContent();
-
-          // === MACD CHART ===
-          var macdChart = LightweightCharts.createChart(macdArea, Object.assign({}, chartOpts, {
-            width: macdArea.clientWidth, height: macdArea.clientHeight,
-            rightPriceScale: { borderColor: '#e0e3eb', autoScale: true },
-          }));
-
-          function ema(arr, period) {
-            var k = 2 / (period + 1);
-            var res = [arr[0]];
-            for (var i = 1; i < arr.length; i++) res.push(arr[i] * k + res[i - 1] * (1 - k));
-            return res;
-          }
-          var ema12 = ema(closes, 12), ema26 = ema(closes, 26);
-          var macdLineArr = closes.map(function (_, i) { return ema12[i] - ema26[i]; });
-          var signalLineArr = ema(macdLineArr, 9);
-          var macdHistArr = macdLineArr.map(function (v, i) { return v - signalLineArr[i]; });
-
-          // MACD precision
-          var macdSample = Math.abs(macdLineArr[macdLineArr.length - 1]);
-          var macdPrec = getPrecision(macdSample);
-          var macdMM = getMinMove(macdSample);
-
-          var macdHistSeries = macdChart.addHistogramSeries({
-            priceFormat: { type: 'price', precision: macdPrec, minMove: macdMM },
-          });
-          macdHistSeries.setData(candles.map(function (c, i) {
-            return {
-              time: c.time, value: macdHistArr[i],
-              color: macdHistArr[i] >= 0 ? 'rgba(38,166,154,0.7)' : 'rgba(239,83,80,0.7)',
-            };
-          }));
-
-          macdChart.addLineSeries({
-            color: '#2962FF', lineWidth: 1,
-            priceLineVisible: false, lastValueVisible: true,
-            priceFormat: { type: 'price', precision: macdPrec, minMove: macdMM },
-          }).setData(candles.map(function (c, i) { return { time: c.time, value: macdLineArr[i] }; }));
-
-          macdChart.addLineSeries({
-            color: '#FF6D00', lineWidth: 1,
-            priceLineVisible: false, lastValueVisible: true,
-            priceFormat: { type: 'price', precision: macdPrec, minMove: macdMM },
-          }).setData(candles.map(function (c, i) { return { time: c.time, value: signalLineArr[i] }; }));
-
-          macdChart.timeScale().fitContent();
-
-          // Update MACD label
-          var lm = macdLineArr[macdLineArr.length - 1];
-          var ls = signalLineArr[signalLineArr.length - 1];
-          var lh = macdHistArr[macdHistArr.length - 1];
-          document.getElementById('macd-info-label').innerHTML = 'MACD 12 26 close 9 &nbsp; <span style="color:' + (lh >= 0 ? '#26a69a' : '#ef5350') + '">' + lh.toFixed(macdPrec) + '</span> <span style="color:#2962FF">' + lm.toFixed(macdPrec) + '</span> <span style="color:#FF6D00">' + ls.toFixed(macdPrec) + '</span>';
-
-          // Sync time scales
-          mainChart.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
-            if (range) macdChart.timeScale().setVisibleLogicalRange(range);
-          });
-          macdChart.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
-            if (range) mainChart.timeScale().setVisibleLogicalRange(range);
-          });
-
-          // Responsive
-          var ro = new ResizeObserver(function () {
-            mainChart.applyOptions({ width: mainArea.clientWidth, height: mainArea.clientHeight });
-            macdChart.applyOptions({ width: macdArea.clientWidth, height: macdArea.clientHeight });
-          });
-          ro.observe(mainArea);
-          ro.observe(macdArea);
-        })
-        .catch(function (err) {
-          mainArea.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#ef5350">K线数据请求失败: ' + err.message + '</div>';
-        });
     }
 
     function closeChart() {
       document.getElementById('chart-modal').classList.remove('active');
+      if (_tvWidget) { try { _tvWidget.remove(); } catch(e) {} _tvWidget = null; }
       document.getElementById('tv-chart-container').innerHTML = '';
     }
 
