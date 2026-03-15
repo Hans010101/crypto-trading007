@@ -1,25 +1,21 @@
 const CORS = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-// VERSION: 2.1 - strict 46-subrequest budget for Cloudflare Free plan
+// VERSION: 2.2 - two-phase fetch to avoid CPU limit
+
+async function safeJson(res) {
+  try { return await res.json(); } catch { return null; }
+}
 
 export async function onRequestGet() {
   try {
-    // === 4 subrequests: initial data ===
-    const [tickerRes, fundingRes, infoRes, btcKlinesRes] = await Promise.all([
+    // Phase 1: 4 core requests
+    const [tickerRes, fundingRes, infoRes] = await Promise.all([
       fetch('https://fapi.binance.com/fapi/v1/ticker/24hr'),
       fetch('https://fapi.binance.com/fapi/v1/premiumIndex'),
       fetch('https://fapi.binance.com/fapi/v1/fundingInfo'),
-      fetch('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1d&limit=2'),
     ]);
-    const [tickerData, fundingData, infoData, btcKlines] = await Promise.all([
-      tickerRes.json(), fundingRes.json(), infoRes.json(), btcKlinesRes.json(),
+    const [tickerData, fundingData, infoData] = await Promise.all([
+      safeJson(tickerRes), safeJson(fundingRes), safeJson(infoRes),
     ]);
-
-    let volChange = 0;
-    if (Array.isArray(btcKlines) && btcKlines.length >= 2) {
-      const yVol = parseFloat(btcKlines[0][7]);
-      const tVol = parseFloat(btcKlines[1][7]);
-      if (yVol > 0) volChange = (tVol - yVol) / yVol * 100;
-    }
 
     const fundingMap = {};
     if (Array.isArray(fundingData)) fundingData.forEach(i => { if (i.symbol) fundingMap[i.symbol] = i; });
@@ -40,57 +36,55 @@ export async function onRequestGet() {
     usdtPairs.sort((a, b) => parseFloat(b.priceChangePercent || 0) - parseFloat(a.priceChangePercent || 0));
     otherPairs.sort((a, b) => parseFloat(b.priceChangePercent || 0) - parseFloat(a.priceChangePercent || 0));
 
-    // === Strict subrequest budget: 46 total (50 limit - 4 initial) ===
-    // L/S: 30 symbols concurrent = 30 subrequests
-    // OI:  16 symbols concurrent = 16 subrequests
-    // Total: 4 + 30 + 16 = 50  (exactly at limit with some buffer)
-    const LS_LIMIT = 30;
-    const OI_LIMIT = 16;
-
     const mainSymbols = usdtPairs.map(t => t.symbol);
+
+    // Phase 2: L/S ratios for top 25 symbols (25 subrequests, total so far: 3+25=28)
+    const LS_LIMIT = 25;
     const lsSymbols = mainSymbols.slice(0, LS_LIMIT);
-    const oiSymbols = mainSymbols.slice(0, OI_LIMIT);
-
-    // Fire L/S and OI concurrently (all in one Promise.all to stay within wall-clock limit)
-    const lsResults = {};
-    const oiResults = {};
-
-    await Promise.all([
-      // L/S ratio fetches (30 concurrent)
-      ...lsSymbols.map(sym =>
+    const lsResponses = await Promise.all(
+      lsSymbols.map(sym =>
         fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=5m&limit=1`)
-          .then(r => r.json())
-          .then(data => {
-            if (Array.isArray(data) && data.length > 0) {
-              let ratio = parseFloat(data[0].longShortRatio || 0);
-              if (!isFinite(ratio)) ratio = 9999;
-              lsResults[sym] = {
-                ratio,
-                long: parseFloat(data[0].longAccount || 0) * 100,
-                short: parseFloat(data[0].shortAccount || 0) * 100,
-              };
-            }
-          })
-          .catch(() => { })
-      ),
-      // OI 24h change fetches (16 concurrent)
-      ...oiSymbols.map(sym =>
+          .catch(() => null)
+      )
+    );
+    const lsResults = {};
+    for (let i = 0; i < lsSymbols.length; i++) {
+      const data = await safeJson(lsResponses[i]);
+      if (Array.isArray(data) && data.length > 0) {
+        const sym = lsSymbols[i];
+        let ratio = parseFloat(data[0].longShortRatio || 0);
+        if (!isFinite(ratio)) ratio = 9999;
+        lsResults[sym] = {
+          ratio,
+          long: parseFloat(data[0].longAccount || 0) * 100,
+          short: parseFloat(data[0].shortAccount || 0) * 100,
+        };
+      }
+    }
+
+    // Phase 3: OI for top 18 symbols (18 subrequests, total: 28+18=46)
+    const OI_LIMIT = 18;
+    const oiSymbols = mainSymbols.slice(0, OI_LIMIT);
+    const oiResponses = await Promise.all(
+      oiSymbols.map(sym =>
         fetch(`https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1h&limit=25`)
-          .then(r => r.json())
-          .then(data => {
-            if (Array.isArray(data) && data.length >= 2) {
-              const oiNow = parseFloat(data[data.length - 1].sumOpenInterest || 0);
-              const oi24h = parseFloat(data[0].sumOpenInterest || 0);
-              const oiValUsd = parseFloat(data[data.length - 1].sumOpenInterestValue || 0);
-              oiResults[sym] = {
-                change: oi24h > 0 ? (oiNow - oi24h) / oi24h * 100 : 0,
-                value: oiValUsd,
-              };
-            }
-          })
-          .catch(() => { })
-      ),
-    ]);
+          .catch(() => null)
+      )
+    );
+    const oiResults = {};
+    for (let i = 0; i < oiSymbols.length; i++) {
+      const data = await safeJson(oiResponses[i]);
+      if (Array.isArray(data) && data.length >= 2) {
+        const sym = oiSymbols[i];
+        const oiNow = parseFloat(data[data.length - 1].sumOpenInterest || 0);
+        const oi24h = parseFloat(data[0].sumOpenInterest || 0);
+        const oiValUsd = parseFloat(data[data.length - 1].sumOpenInterestValue || 0);
+        oiResults[sym] = {
+          change: oi24h > 0 ? (oiNow - oi24h) / oi24h * 100 : 0,
+          value: oiValUsd,
+        };
+      }
+    }
 
     const totalVolume = [...usdtPairs, ...otherPairs].reduce((s, t) => s + parseFloat(t.quoteVolume || 0), 0);
 
@@ -122,14 +116,14 @@ export async function onRequestGet() {
       data: mapResult(usdtPairs),
       other: mapResult(otherPairs),
       total_volume: totalVolume,
-      volume_change: volChange,
+      volume_change: 0,
       ts: Date.now(),
-      _v: '2.1',
+      _v: '2.2',
     }), { headers: CORS });
 
   } catch (e) {
     return new Response(
-      JSON.stringify({ exchange: 'Binance', data: [], other: [], error: e.message, _v: '2.1' }),
+      JSON.stringify({ exchange: 'Binance', data: [], other: [], error: String(e), _v: '2.2-err' }),
       { headers: CORS, status: 500 }
     );
   }
