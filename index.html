@@ -1652,9 +1652,14 @@
     let systemModulesData = [];
     let allTickersData = [];
     let otherHotData = [];
-    let tickersDisplayCount = 30; // Max items to display initially
-    let currentSort = 'desc';  // 'desc' | 'asc'
-    let currentSortField = 'change24h'; // 'change24h' | 'oiChange24h'
+    let tickersDisplayCount = 30;
+    let currentSort = 'desc';
+    let currentSortField = 'change24h';
+    // Global caches - persist across tickers refresh
+    const lsGlobalCache = {};
+    const oiGlobalCache = {};
+    let lsLoading = false;
+    let oiLoading = false;
 
     function applySort(data) {
       if (!data) return;
@@ -2000,114 +2005,76 @@
       }
     });
 
-    // Fast tickers load (no L/S ratios - for instant display)
-    async function loadTickersFast() {
-      try {
-        const res = await fetch('/api/binance/tickers_fast');
-        const json = await res.json();
-        allTickersData = json.data || [];
-        otherHotData = json.other || [];
-        applySort(allTickersData);
-        applySort(otherHotData);
-        // Update stat cards
-        const btcData = allTickersData.find(d => d.symbol === 'BTC/USDT');
-        const ethData = allTickersData.find(d => d.symbol === 'ETH/USDT');
-        if (btcData) {
-          document.getElementById('stat-btc').textContent = '$' + fmt(btcData.price, 2);
-          const c = btcData.change24h;
-          document.getElementById('stat-btc-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          document.getElementById('stat-btc-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
+    // mergeGlobalCaches: apply persisted L/S + OI data to ticker array
+    function mergeGlobalCaches(data) {
+      if (!data) return;
+      for (const t of data) {
+        const key = t.symbol.replace('/USDT', 'USDT');
+        if (lsGlobalCache[key]) t.lsRatio = lsGlobalCache[key];
+        if (oiGlobalCache[key]) {
+          t.oiChange24h = oiGlobalCache[key].change;
+          t.oiValue = oiGlobalCache[key].value;
         }
-        if (ethData) {
-          document.getElementById('stat-eth').textContent = '$' + fmt(ethData.price, 2);
-          const c = ethData.change24h;
-          document.getElementById('stat-eth-change').textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          document.getElementById('stat-eth-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
-        }
-        if (json.total_volume) document.getElementById('stat-volume').textContent = '$' + fmtVol(json.total_volume);
-        if (json.volume_change !== undefined) {
-          const c = json.volume_change;
-          const volSub = document.getElementById('stat-volume-sub');
-          volSub.textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
-          volSub.style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
-          volSub.style.fontWeight = '600';
-        }
-        renderTickers();
-        console.log('[Fast] Loaded', allTickersData.length, '+', otherHotData.length, 'pairs (no L/S)');
-      } catch (e) {
-        console.error('[Fast] Failed:', e);
-        // Fallback to full load
-        return loadTickers();
       }
     }
 
     // Progressive L/S loading: 45 symbols per batch, covers ALL symbols
-    // Each /api/binance/ls call is a separate Worker invocation with its own 50-subrequest budget
+    // Uses lsGlobalCache that persists across tickers refreshes
     async function loadLSRatios(allData) {
-      if (!allData || allData.length === 0) return;
-      const symbols = allData.map(t => t.symbol.replace('/USDT', 'USDT'));
-      const BATCH = 45;
-      const lsCache = {};
-      // Process in pairs of batches concurrently (2 calls at a time for speed)
-      for (let i = 0; i < symbols.length; i += BATCH * 2) {
-        const batch1 = symbols.slice(i, i + BATCH);
-        const batch2 = symbols.slice(i + BATCH, i + BATCH * 2);
-        const promises = [];
-        if (batch1.length) promises.push(
-          fetch('/api/binance/ls?symbols=' + batch1.join(','))
-            .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(lsCache, d); })
-            .catch(() => {})
-        );
-        if (batch2.length) promises.push(
-          fetch('/api/binance/ls?symbols=' + batch2.join(','))
-            .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(lsCache, d); })
-            .catch(() => {})
-        );
-        await Promise.all(promises);
-        // Merge and render progressively after each pair of batches
-        for (const t of allData) {
-          const key = t.symbol.replace('/USDT', 'USDT');
-          if (lsCache[key]) t.lsRatio = lsCache[key];
+      if (lsLoading || !allData || allData.length === 0) return;
+      lsLoading = true;
+      try {
+        const symbols = allData.map(t => t.symbol.replace('/USDT', 'USDT'));
+        const BATCH = 45;
+        for (let i = 0; i < symbols.length; i += BATCH * 2) {
+          const batch1 = symbols.slice(i, i + BATCH);
+          const batch2 = symbols.slice(i + BATCH, i + BATCH * 2);
+          const promises = [];
+          if (batch1.length) promises.push(
+            fetch('/api/binance/ls?symbols=' + batch1.join(','))
+              .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(lsGlobalCache, d); })
+              .catch(() => {})
+          );
+          if (batch2.length) promises.push(
+            fetch('/api/binance/ls?symbols=' + batch2.join(','))
+              .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(lsGlobalCache, d); })
+              .catch(() => {})
+          );
+          await Promise.all(promises);
+          mergeGlobalCaches(allTickersData);
+          renderTickers();
         }
-        renderTickers();
-      }
-      const total = Object.keys(lsCache).length;
-      console.log('[LS] Done: loaded', total, 'symbols L/S data');
+        console.log('[LS] Done: loaded', Object.keys(lsGlobalCache).length, 'symbols');
+      } finally { lsLoading = false; }
     }
 
-    // OI loading: 45 symbols per batch via /api/binance/oi, covers top 90
+    // OI loading: 45 symbols per batch, covers ALL symbols progressively
     async function loadOIData(allData) {
-      if (!allData || allData.length === 0) return;
-      const symbols = allData.map(t => t.symbol.replace('/USDT', 'USDT'));
-      const BATCH = 45;
-      const oiCache = {};
-      // 2 batches covers top 90 symbols
-      const batch1 = symbols.slice(0, BATCH);
-      const batch2 = symbols.slice(BATCH, BATCH * 2);
-      const promises = [];
-      if (batch1.length) promises.push(
-        fetch('/api/binance/oi?symbols=' + batch1.join(','))
-          .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(oiCache, d); })
-          .catch(() => {})
-      );
-      if (batch2.length) promises.push(
-        fetch('/api/binance/oi?symbols=' + batch2.join(','))
-          .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(oiCache, d); })
-          .catch(() => {})
-      );
-      await Promise.all(promises);
-      // Merge OI data
-      let updated = 0;
-      for (const t of allData) {
-        const key = t.symbol.replace('/USDT', 'USDT');
-        if (oiCache[key]) {
-          t.oiChange24h = oiCache[key].change;
-          t.oiValue = oiCache[key].value;
-          updated++;
+      if (oiLoading || !allData || allData.length === 0) return;
+      oiLoading = true;
+      try {
+        const symbols = allData.map(t => t.symbol.replace('/USDT', 'USDT'));
+        const BATCH = 45;
+        for (let i = 0; i < symbols.length; i += BATCH * 2) {
+          const batch1 = symbols.slice(i, i + BATCH);
+          const batch2 = symbols.slice(i + BATCH, i + BATCH * 2);
+          const promises = [];
+          if (batch1.length) promises.push(
+            fetch('/api/binance/oi?symbols=' + batch1.join(','))
+              .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(oiGlobalCache, d); })
+              .catch(() => {})
+          );
+          if (batch2.length) promises.push(
+            fetch('/api/binance/oi?symbols=' + batch2.join(','))
+              .then(r => r.json()).then(d => { if (d && typeof d === 'object' && !d.error) Object.assign(oiGlobalCache, d); })
+              .catch(() => {})
+          );
+          await Promise.all(promises);
+          mergeGlobalCaches(allTickersData);
+          renderTickers();
         }
-      }
-      console.log('[OI] Done: loaded', updated, 'symbols OI data');
-      renderTickers();
+        console.log('[OI] Done: loaded', Object.keys(oiGlobalCache).length, 'symbols');
+      } finally { oiLoading = false; }
     }
 
     async function loadTickers() {
@@ -2118,6 +2085,10 @@
         const json = await res.json();
         allTickersData = json.data || [];
         otherHotData = json.other || [];
+
+        // Immediately merge persisted L/S + OI caches
+        mergeGlobalCaches(allTickersData);
+        mergeGlobalCaches(otherHotData);
 
         applySort(allTickersData);
         applySort(otherHotData);
@@ -2149,7 +2120,7 @@
 
         renderTickers();
 
-        // Background: load L/S (all symbols progressively) + OI (top 90) concurrently
+        // Background: load L/S + OI for ALL symbols (only if not already loading)
         loadLSRatios(allTickersData);
         loadOIData(allTickersData);
       } catch (e) {
@@ -2362,16 +2333,11 @@
       } catch (e) { console.error('BTC/ETH load error:', e); }
     }
 
-    // === Fast initial load (no L/S ratios, instant display) ===
+    // === Initial load ===
     loadBtcEth();
     loadFNG();
     loadSystemInfo();
-    // Load quick otherhot data first (fast endpoint, no LS ratios)
-    loadTickersFast().then(() => {
-      // After fast data renders, pre-cache full tickers with L/S ratios in background
-      console.log('[Init] Fast data loaded, pre-caching full tickers in background...');
-      loadTickers();
-    });
+    loadTickers(); // Direct load with L/S + OI in background
 
     // Load other tab data lazily
     loadGridBacktest();
@@ -2380,9 +2346,9 @@
     loadMockData('/api/alerts/list', 'alerts-tbody', renderAlerts);
     loadMockData('/api/scanner/events', 'scanner-tbody', renderScanner);
 
-    // Auto-refresh
+    // Auto-refresh (60s for tickers - cached data persists between refreshes)
     setInterval(loadBtcEth, 15000);
-    setInterval(loadTickers, 30000); // Full tickers every 30s (includes L/S)
+    setInterval(loadTickers, 60000);
     setInterval(loadFNG, 60000);
 
     // === SEARCH LOGIC ===
