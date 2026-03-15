@@ -2041,6 +2041,34 @@
       }
     }
 
+    // Fetch L/S ratios via dedicated /api/binance/ls endpoint
+    // Two concurrent calls each covering 45 symbols = 90 total coverage
+    async function loadLSRatios(allData) {
+      if (!allData || allData.length === 0) return;
+      const symbols = allData.map(t => t.symbol.replace('/USDT', 'USDT'));
+      const batch1 = symbols.slice(0, 45);
+      const batch2 = symbols.slice(45, 90);
+      const lsCache = {};
+      const fetchLS = async (syms) => {
+        if (!syms.length) return;
+        try {
+          const r = await fetch('/api/binance/ls?symbols=' + syms.join(','));
+          const d = await r.json();
+          if (d && typeof d === 'object') Object.assign(lsCache, d);
+        } catch (e) { console.warn('[LS] fetch error:', e); }
+      };
+      // Fire two Worker invocations simultaneously - each has its own 50-subrequest budget
+      await Promise.all([fetchLS(batch1), fetchLS(batch2)]);
+      // Merge L/S data into allTickersData
+      let updated = 0;
+      for (const t of allData) {
+        const key = t.symbol.replace('/USDT', 'USDT');
+        if (lsCache[key]) { t.lsRatio = lsCache[key]; updated++; }
+      }
+      console.log('[LS] Updated', updated, 'symbols with L/S data');
+      renderTickers();
+    }
+
     async function loadTickers() {
       const btn = document.getElementById('btn-refresh-tickers');
       btn.classList.add('loading');
@@ -2069,10 +2097,7 @@
           document.getElementById('stat-eth-change').style.color = c >= 0 ? 'var(--gain)' : 'var(--loss)';
         }
 
-        // Update Total Volume
-        if (json.total_volume) {
-          document.getElementById('stat-volume').textContent = '$' + fmtVol(json.total_volume);
-        }
+        if (json.total_volume) document.getElementById('stat-volume').textContent = '$' + fmtVol(json.total_volume);
         if (json.volume_change !== undefined) {
           const c = json.volume_change;
           const volSub = document.getElementById('stat-volume-sub');
@@ -2082,6 +2107,9 @@
         }
 
         renderTickers();
+
+        // After initial render, load L/S ratios in background (covers 90 symbols)
+        loadLSRatios(allTickersData);
       } catch (e) {
         console.error('Failed to load tickers:', e);
         document.getElementById('ticker-tbody').innerHTML =

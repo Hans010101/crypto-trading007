@@ -1,20 +1,17 @@
 const CORS = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-// VERSION: 2.2 - two-phase fetch to avoid CPU limit
-
-async function safeJson(res) {
-  try { return await res.json(); } catch { return null; }
-}
+// VERSION: 2.3 - No L/S here (delegated to /api/binance/ls), OI for top 45
+// Subrequest budget: 3 core + 45 OI = 48 (within free plan limit of 50)
 
 export async function onRequestGet() {
   try {
-    // Phase 1: 4 core requests
+    // 3 subrequests
     const [tickerRes, fundingRes, infoRes] = await Promise.all([
       fetch('https://fapi.binance.com/fapi/v1/ticker/24hr'),
       fetch('https://fapi.binance.com/fapi/v1/premiumIndex'),
       fetch('https://fapi.binance.com/fapi/v1/fundingInfo'),
     ]);
     const [tickerData, fundingData, infoData] = await Promise.all([
-      safeJson(tickerRes), safeJson(fundingRes), safeJson(infoRes),
+      tickerRes.json(), fundingRes.json(), infoRes.json(),
     ]);
 
     const fundingMap = {};
@@ -38,32 +35,8 @@ export async function onRequestGet() {
 
     const mainSymbols = usdtPairs.map(t => t.symbol);
 
-    // Phase 2: L/S ratios for top 25 symbols (25 subrequests, total so far: 3+25=28)
-    const LS_LIMIT = 25;
-    const lsSymbols = mainSymbols.slice(0, LS_LIMIT);
-    const lsResponses = await Promise.all(
-      lsSymbols.map(sym =>
-        fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=5m&limit=1`)
-          .catch(() => null)
-      )
-    );
-    const lsResults = {};
-    for (let i = 0; i < lsSymbols.length; i++) {
-      const data = await safeJson(lsResponses[i]);
-      if (Array.isArray(data) && data.length > 0) {
-        const sym = lsSymbols[i];
-        let ratio = parseFloat(data[0].longShortRatio || 0);
-        if (!isFinite(ratio)) ratio = 9999;
-        lsResults[sym] = {
-          ratio,
-          long: parseFloat(data[0].longAccount || 0) * 100,
-          short: parseFloat(data[0].shortAccount || 0) * 100,
-        };
-      }
-    }
-
-    // Phase 3: OI for top 18 symbols (18 subrequests, total: 28+18=46)
-    const OI_LIMIT = 18;
+    // OI for top 45 symbols (45 subrequests, total: 3+45=48, within 50)
+    const OI_LIMIT = 45;
     const oiSymbols = mainSymbols.slice(0, OI_LIMIT);
     const oiResponses = await Promise.all(
       oiSymbols.map(sym =>
@@ -73,17 +46,19 @@ export async function onRequestGet() {
     );
     const oiResults = {};
     for (let i = 0; i < oiSymbols.length; i++) {
-      const data = await safeJson(oiResponses[i]);
-      if (Array.isArray(data) && data.length >= 2) {
-        const sym = oiSymbols[i];
-        const oiNow = parseFloat(data[data.length - 1].sumOpenInterest || 0);
-        const oi24h = parseFloat(data[0].sumOpenInterest || 0);
-        const oiValUsd = parseFloat(data[data.length - 1].sumOpenInterestValue || 0);
-        oiResults[sym] = {
-          change: oi24h > 0 ? (oiNow - oi24h) / oi24h * 100 : 0,
-          value: oiValUsd,
-        };
-      }
+      try {
+        const data = oiResponses[i] ? await oiResponses[i].json() : null;
+        if (Array.isArray(data) && data.length >= 2) {
+          const sym = oiSymbols[i];
+          const oiNow = parseFloat(data[data.length - 1].sumOpenInterest || 0);
+          const oi24h = parseFloat(data[0].sumOpenInterest || 0);
+          const oiValUsd = parseFloat(data[data.length - 1].sumOpenInterestValue || 0);
+          oiResults[sym] = {
+            change: oi24h > 0 ? (oiNow - oi24h) / oi24h * 100 : 0,
+            value: oiValUsd,
+          };
+        }
+      } catch { }
     }
 
     const totalVolume = [...usdtPairs, ...otherPairs].reduce((s, t) => s + parseFloat(t.quoteVolume || 0), 0);
@@ -91,7 +66,6 @@ export async function onRequestGet() {
     const mapResult = (items) => items.map((t, i) => {
       const sym = t.symbol || '';
       const fInfo = fundingMap[sym] || {};
-      const ls = lsResults[sym] || { ratio: 0, long: 0, short: 0 };
       const oi = oiResults[sym] || { change: 0, value: 0 };
       return {
         rank: i + 1,
@@ -105,7 +79,7 @@ export async function onRequestGet() {
         fundingRate: parseFloat(fInfo.lastFundingRate || 0),
         nextFundingTime: parseInt(fInfo.nextFundingTime || 0),
         fundingInterval: intervalMap[sym] || 8,
-        lsRatio: ls,
+        lsRatio: { ratio: 0, long: 0, short: 0 }, // populated by /api/binance/ls on the frontend
         oiChange24h: oi.change,
         oiValue: oi.value,
       };
@@ -118,12 +92,12 @@ export async function onRequestGet() {
       total_volume: totalVolume,
       volume_change: 0,
       ts: Date.now(),
-      _v: '2.2',
+      _v: '2.3',
     }), { headers: CORS });
 
   } catch (e) {
     return new Response(
-      JSON.stringify({ exchange: 'Binance', data: [], other: [], error: String(e), _v: '2.2-err' }),
+      JSON.stringify({ exchange: 'Binance', data: [], other: [], error: String(e), _v: '2.3-err' }),
       { headers: CORS, status: 500 }
     );
   }
